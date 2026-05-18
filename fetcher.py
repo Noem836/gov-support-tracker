@@ -22,6 +22,7 @@ load_dotenv()
 
 BASE_OUTPUT = Path("output")
 OPEN_DATA_API_KEY = os.getenv("OPEN_DATA_API_KEY", "")
+SMES_API_KEY = os.getenv("SMES_API_KEY", "")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -388,7 +389,90 @@ def fetch_work24() -> list:
     return programs
 
 
-# ─── 소스 5: 긴급복지 / 재난·피해 지원 ──────────────────────────────────────────
+# ─── 소스 5: 중소벤처24 API ──────────────────────────────────────────────────────
+
+def fetch_smes() -> list:
+    """중소벤처24 — 금융지원 분야 사업 공고 수집"""
+    if not SMES_API_KEY:
+        logger.warning("SMES_API_KEY 미설정 — 중소벤처24 API 생략")
+        return []
+
+    programs = []
+
+    # 중소벤처24 공고 API (금융 분야 필터)
+    endpoints = [
+        "https://www.smes.go.kr/openapi/api/pbanc/getPbancInfo.do",
+        "https://apis.data.go.kr/1051000/bizSuppInfoService/getBizSuppInfo",
+    ]
+
+    financial_keywords = ["금융", "융자", "대출", "보증", "보조금", "지원금", "바우처", "수당", "보상"]
+
+    for url in endpoints:
+        try:
+            params = {
+                "serviceKey": SMES_API_KEY,
+                "pageNo": 1,
+                "numOfRows": 100,
+                "type": "json",
+            }
+            resp = retry_request(url, params=params, timeout=25)
+
+            try:
+                data = resp.json()
+            except Exception:
+                logger.warning(f"중소벤처24 JSON 파싱 실패: {url}")
+                continue
+
+            # 응답 구조 파싱
+            items = []
+            if isinstance(data, dict):
+                body = data.get("response", data).get("body", data)
+                raw = body.get("items", body.get("data", []))
+                if isinstance(raw, dict):
+                    items = raw.get("item", [])
+                elif isinstance(raw, list):
+                    items = raw
+            if isinstance(items, dict):
+                items = [items]
+
+            count = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                title = item.get("pbanc_nm") or item.get("pbancNm") or item.get("title") or ""
+                category = item.get("biz_trgt_cd_nm") or item.get("category") or ""
+
+                # 금융 관련 항목만 필터링
+                text = f"{title} {category}".replace(" ", "")
+                if not any(kw in text for kw in financial_keywords):
+                    continue
+
+                deadline_raw = item.get("rcpt_end_ymd") or item.get("rcptEndYmd") or ""
+                programs.append({
+                    "id": make_id("smes", str(item.get("pbanc_no") or item.get("pbancNo") or title)),
+                    "title": title,
+                    "agency": item.get("supt_inst_nm") or item.get("suptInstNm") or "중소벤처기업부",
+                    "category": category or "금융지원",
+                    "target": item.get("biz_trgt_desc") or "",
+                    "amount": item.get("supt_amt_desc") or item.get("suptAmtDesc") or "",
+                    "deadline": str(deadline_raw)[:10],
+                    "region": item.get("supt_regin_nm") or "전국",
+                    "url": item.get("dtl_pg_url") or "",
+                    "source": "중소벤처24",
+                    "fetched_at": datetime.now().isoformat(),
+                })
+                count += 1
+
+            logger.info(f"중소벤처24 ({url.split('/')[-1]}): {count}건 (금융 필터)")
+            break  # 첫 번째 성공한 엔드포인트에서 중단
+
+        except Exception as e:
+            logger.warning(f"중소벤처24 API 실패 ({url.split('/')[-1]}): {e}")
+
+    return programs
+
+
+# ─── 소스 6: 긴급복지 / 재난·피해 지원 ──────────────────────────────────────────
 
 def fetch_emergency_support() -> list:
     """긴급복지지원, 재난피해보상, 범죄피해구조금 등"""
@@ -529,6 +613,9 @@ def fetch_all(context: dict) -> dict:
     if len(bokjiro_api) < 10:
         logger.info("복지로 웹 스크래핑 중 (API 보완)...")
         all_programs.extend(fetch_bokjiro_scrape())
+
+    logger.info("중소벤처24 API 수집 중...")
+    all_programs.extend(fetch_smes())
 
     logger.info("서민금융진흥원 수집 중...")
     all_programs.extend(fetch_kinfa())
