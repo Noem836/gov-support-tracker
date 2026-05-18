@@ -1,0 +1,36 @@
+{
+  "_comment": "이 파일을 본인 상황에 맞게 수정하세요",
+  
+  "basic": {
+    "type": "법인사업자",
+    "name": "홍길동 / (주)예시기업",
+    "industry": "IT서비스",
+    "industry_code": "J62",
+    "established_year": 2020,
+    "region": "서울",
+    "employees": 10,
+    "annual_revenue_million": 500
+  },
+  
+  "interests": {
+    "categories": ["R&D", "수출지원", "고용지원", "창업지원"],
+    "keywords": ["소프트웨어", "스타트업", "AI", "디지털전환"],
+    "min_support_amount_million": 10,
+    "exclude_keywords": ["제조업", "농업", "건설"]
+  },
+  
+  "certifications": [
+    "벤처기업",
+    "이노비즈"
+  ],
+  
+  "notification": {
+    "email": false,
+    "slack": false,
+    "notion": true,
+    "min_score": 60,
+    "max_items": 10,
+    "send_day": "monday",
+    "send_time": "09:00"
+  }
+}

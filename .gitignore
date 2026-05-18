@@ -1,0 +1,25 @@
+# 환경 변수 (절대 커밋 금지)
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# 수집·분석 결과물 (재생성 가능)
+output/
+logs/
+
+# macOS
+.DS_Store

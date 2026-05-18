@@ -1,0 +1,50 @@
+name: 주간 정부지원사업 알림
+
+on:
+  schedule:
+    # 매주 월요일 09:00 KST = 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:  # GitHub에서 수동 실행 버튼
+
+jobs:
+  run-harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: .env 파일 생성 (GitHub Secrets → 환경변수)
+        run: |
+          cat > .env << 'EOF'
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          OPEN_DATA_API_KEY=${{ secrets.OPEN_DATA_API_KEY }}
+          NOTION_API_KEY=${{ secrets.NOTION_API_KEY }}
+          NOTION_DATABASE_ID=${{ secrets.NOTION_DATABASE_ID }}
+          GMAIL_USER=
+          GMAIL_APP_PASSWORD=
+          SLACK_WEBHOOK_URL=
+          EOF
+
+      - name: 하네스 실행 (수집 → 분석 → Notion 발송)
+        run: python harness.py
+
+      - name: 실행 결과 로그 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-logs-${{ github.run_number }}
+          path: |
+            logs/
+            output/
+          retention-days: 30
