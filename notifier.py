@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re as _re
 import smtplib
 import sys
 from datetime import date, datetime
@@ -282,9 +283,6 @@ def send_slack(programs: list, total_fetched: int) -> bool:
         return False
 
 
-import re as _re
-
-
 def _notion_rich_text(text: str) -> list:
     return [{"type": "text", "text": {"content": str(text)[:2000]}}]
 
@@ -310,6 +308,10 @@ def _notion_page_blocks(p: dict) -> list:
     dl      = p.get("deadline", "")
     score   = p.get("score", 0)
     d_label = deadline_label(dl, ongoing=p.get("ongoing", False))
+    period_text = (
+        "상시 모집" if p.get("ongoing") and not dl
+        else f"{p.get('start_date', '미정')} ~ {dl or '미정'}  ({d_label})"
+    )
 
     def divider():
         return {"object": "block", "type": "divider", "divider": {}}
@@ -345,7 +347,7 @@ def _notion_page_blocks(p: dict) -> list:
             f"📂 분야: {p.get('category', '미정')}",
             f"🌏 지역: {p.get('region', '전국')}",
             f"💰 지원금액: {p.get('amount', '확인 필요')}",
-            f"📅 신청기간: {'상시 모집' if p.get('ongoing') and not dl else f\"{p.get('start_date', '미정')} ~ {dl or '미정'}  ({d_label})\"}",
+            f"📅 신청기간: {period_text}",
         ]),
         divider(),
         heading("🤖 AI 분석"),

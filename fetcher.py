@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 금융지원 정보 수집 모듈
-Sources: 복지로(생활/의료/주거), 서민금융진흥원(대출), 고용24(실업급여), 긴급복지/재난지원
+Sources: 보조금24(행정안전부), 서민금융진흥원, 고용24, 긴급복지/재난지원,
+         기업마당, 한국문화예술위원회, 청년정책포털
 """
 
 import hashlib
@@ -12,7 +13,6 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote
 
 import requests
 from bs4 import BeautifulSoup
@@ -21,9 +21,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_OUTPUT = Path("output")
-# .env 키는 URL 인코딩 상태로 저장돼 있으므로 디코딩 후 사용
-OPEN_DATA_API_KEY = unquote(os.getenv("OPEN_DATA_API_KEY", ""))
-SMES_API_KEY = os.getenv("SMES_API_KEY", "")
 BOKJIRO_API_KEY = os.getenv("BOKJIRO_API_KEY", "")
 
 HEADERS = {
@@ -39,19 +36,6 @@ CASH_KEYWORDS = [
     "바우처", "현금", "직불금", "보상금", "구조금", "배상", "환급", "지급",
     "창업자금", "R&D", "사업화", "정착금", "이주비", "훈련비", "교육비",
 ]
-
-BOKJIRO_LIFE_CODES = {
-    "003": "청소년",
-    "004": "청년",
-    "005": "중장년",
-}
-BOKJIRO_THEME_CODES = {
-    "030": "생활지원",
-    "040": "주거",
-    "050": "일자리",
-    "100": "교육",
-    "130": "서민금융",
-}
 
 logger = logging.getLogger(__name__)
 
@@ -82,148 +66,7 @@ def make_id(source: str, raw_key: str) -> str:
     return hashlib.md5(f"{source}:{raw_key}".encode()).hexdigest()[:12]
 
 
-# ─── 소스 1: 복지로 지자체복지서비스 API ──────────────────────────────────────────
-
-import xml.etree.ElementTree as ET
-
-def _parse_bokjiro_xml(xml_text: str) -> list:
-    """복지로 XML 응답 → 사업 목록"""
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return []
-    items = []
-    for s in root.findall(".//servList"):
-        t = lambda tag: (s.findtext(tag) or "").strip()
-        serv_id = t("servId")
-        title   = t("servNm")
-        if not title:
-            continue
-        def fmt_date(raw: str) -> str:
-            raw = raw.strip()[:8]
-            if len(raw) == 8 and raw.isdigit():
-                return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
-            return ""
-
-        items.append({
-            "id":         make_id("bokjiro", serv_id or title),
-            "title":      title,
-            "agency":     t("bizChrDeptNm"),
-            "category":   t("intrsThemaNmArray") or "복지",
-            "target":     t("trgterIndvdlNmArray"),
-            "amount":     "",  # 복지로 API는 금액 미제공
-            "start_date": fmt_date(t("servBgngYmd")),
-            "deadline":   fmt_date(t("servEndYmd")),
-            "region":     t("ctpvNm") or t("sggNm") or "지자체",
-            "url":        t("servDtlLink"),
-            "source":     "복지로",
-            "fetched_at": datetime.now().isoformat(),
-        })
-    return items
-
-
-def fetch_bokjiro_api() -> list:
-    """복지로 지자체복지서비스 API (한국사회보장정보원)"""
-    if not BOKJIRO_API_KEY:
-        logger.warning("BOKJIRO_API_KEY 미설정 — 복지로 API 생략")
-        return []
-
-    url = "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations/LcgvWelfarelist"
-    programs = []
-    consecutive_failures = 0
-
-    for life_code in BOKJIRO_LIFE_CODES:
-        for theme_code in BOKJIRO_THEME_CODES:
-            if consecutive_failures >= 3:
-                logger.warning("복지로 지자체 API 연속 실패 3회 — 나머지 조합 생략")
-                return programs
-            try:
-                params = {
-                    "serviceKey": BOKJIRO_API_KEY,
-                    "pageNo":     "1",
-                    "numOfRows":  "10",
-                    "lifeArray":  life_code,
-                    "intrsThemaArray": theme_code,
-                }
-                resp = retry_request(url, params=params, timeout=10, max_retries=1)
-                programs.extend(_parse_bokjiro_xml(resp.text))
-                consecutive_failures = 0
-                time.sleep(0.3)
-            except Exception as e:
-                consecutive_failures += 1
-                logger.warning(f"복지로 API (생애{life_code}/주제{theme_code}) 실패: {e}")
-
-    logger.info(f"복지로 지자체 API: {len(programs)}건")
-    return programs
-
-
-# ─── 소스 2: 복지로 중앙부처복지서비스 API ──────────────────────────────────────
-
-def fetch_national_welfare_api() -> list:
-    """복지로 중앙부처복지서비스 API (한국사회보장정보원)"""
-    if not BOKJIRO_API_KEY:
-        logger.warning("BOKJIRO_API_KEY 미설정 — 중앙부처복지서비스 API 생략")
-        return []
-
-    url = "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001/NationalWelfarelistV001"
-    programs = []
-    consecutive_failures = 0
-
-    for life_code in BOKJIRO_LIFE_CODES:
-        for theme_code in BOKJIRO_THEME_CODES:
-            if consecutive_failures >= 3:
-                logger.warning("복지로 중앙부처 API 연속 실패 3회 — 나머지 조합 생략")
-                return programs
-            try:
-                params = {
-                    "serviceKey":      BOKJIRO_API_KEY,
-                    "callTp":          "L",
-                    "pageNo":          "1",
-                    "numOfRows":       "10",
-                    "srchKeyCode":     "003",
-                    "lifeArray":       life_code,
-                    "intrsThemaArray": theme_code,
-                }
-                resp = retry_request(url, params=params, timeout=10, max_retries=1)
-                try:
-                    root = ET.fromstring(resp.text)
-                except ET.ParseError:
-                    continue
-                for s in root.findall(".//servList"):
-                    t = lambda tag: (s.findtext(tag) or "").strip()
-                    serv_id = t("servId")
-                    title   = t("servNm")
-                    if not title:
-                        continue
-                    def fmt_date(raw: str) -> str:
-                        raw = raw.strip()[:8]
-                        if len(raw) == 8 and raw.isdigit():
-                            return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
-                        return ""
-
-                    programs.append({
-                        "id":         make_id("national_welfare", serv_id or title),
-                        "title":      title,
-                        "agency":     t("jurMnofNm") or t("jurOrgNm"),
-                        "category":   t("intrsThemaArray") or "복지",
-                        "target":     t("trgterIndvdlArray"),
-                        "amount":     "",  # 복지로 API는 금액 미제공
-                        "start_date": fmt_date(t("servBgngYmd")),
-                        "deadline":   fmt_date(t("servEndYmd")),
-                        "region":     "전국",
-                        "url":        t("servDtlLink"),
-                        "source":     "복지로(중앙부처)",
-                        "fetched_at": datetime.now().isoformat(),
-                    })
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"중앙부처복지서비스 API (생애{life_code}/주제{theme_code}) 실패: {e}")
-
-    logger.info(f"복지로 중앙부처 API: {len(programs)}건")
-    return programs
-
-
-# ─── 소스 3: 서민금융진흥원 ────────────────────────────────────────────────────
+# ─── 소스 1: 서민금융진흥원 ────────────────────────────────────────────────────
 
 def fetch_kinfa() -> list:
     """서민금융진흥원 — 햇살론, 미소금융, 소액생계비대출 등"""
@@ -322,7 +165,7 @@ def fetch_kinfa() -> list:
     return programs
 
 
-# ─── 소스 4: 고용24 ───────────────────────────────────────────────────────────
+# ─── 소스 2: 고용24 ───────────────────────────────────────────────────────────
 
 def fetch_work24() -> list:
     """고용24 — 실업급여, 취업성공패키지, 직업훈련 생계비"""
@@ -420,14 +263,7 @@ def fetch_work24() -> list:
     return programs
 
 
-# ─── 소스 5: 중소벤처24 API ──────────────────────────────────────────────────────
-
-def fetch_smes() -> list:
-    """중소벤처24 — fetch_bizinfo_financial()과 동일 소스, API 인증 필요로 비활성"""
-    return []
-
-
-# ─── 소스 6: 긴급복지 / 재난·피해 지원 ──────────────────────────────────────────
+# ─── 소스 3: 긴급복지 / 재난·피해 지원 ──────────────────────────────────────────
 
 def fetch_emergency_support() -> list:
     """긴급복지지원, 재난피해보상, 범죄피해구조금 등"""
@@ -550,7 +386,7 @@ def is_cash_support(title: str, category: str = "", amount: str = "", target: st
     return any(kw in text for kw in CASH_KEYWORDS)
 
 
-# ─── 소스 7: 기업마당 금융/보조금 공고 ───────────────────────────────────────────
+# ─── 소스 4: 기업마당 금융/보조금 공고 ───────────────────────────────────────────
 
 def fetch_bizinfo_financial() -> list:
     """기업마당 — 금융·창업 카테고리 공고 (현금지원 필터 적용)"""
@@ -614,7 +450,7 @@ def fetch_bizinfo_financial() -> list:
     return programs
 
 
-# ─── 소스 8: 한국문화예술위원회 ───────────────────────────────────────────────────
+# ─── 소스 5: 한국문화예술위원회 ───────────────────────────────────────────────────
 
 def fetch_arko() -> list:
     """한국문화예술위원회 — 예술활동지원금, 창작지원금 (현금지원만)"""
@@ -712,7 +548,7 @@ def fetch_arko() -> list:
     return programs
 
 
-# ─── 소스 9: 청년정책포털 ────────────────────────────────────────────────────────
+# ─── 소스 6: 청년정책포털 ────────────────────────────────────────────────────────
 
 def fetch_youth_portal() -> list:
     """청년정책포털 — 청년 현금지원 (월세·저축·도약계좌·장려금 등)"""
@@ -829,7 +665,7 @@ def fetch_youth_portal() -> list:
     return programs
 
 
-# ─── 소스 10: 추가 현금지원 기관 ─────────────────────────────────────────────────
+# ─── 소스 7: 추가 현금지원 기관 ─────────────────────────────────────────────────
 
 def fetch_additional_cash_support() -> list:
     """K-Startup, 예술인복지재단, 콘텐츠진흥원, 국민체육진흥공단 등 현금지원 고정 항목"""
@@ -946,10 +782,9 @@ def fetch_additional_cash_support() -> list:
     return programs
 
 
-# ─── 소스 11: 보조금24 (행정안전부 대한민국 공공서비스 혜택 정보) ──────────────────
-# Swagger: https://infuser.odcloud.kr/api/stages/44436/api-docs
+# ─── 소스 8: 보조금24 (행정안전부) ──────────────────────────────────────────────
 # Base URL: https://api.odcloud.kr/api/gov24/v3/
-# 실제 응답 필드명은 한글 (서비스ID, 서비스명, 소관기관명, 신청기한 등)
+# 응답 필드명 한글 (서비스ID, 서비스명, 소관기관명, 신청기한 등)
 
 import re as _re
 
@@ -987,15 +822,20 @@ def _parse_gov24_deadline(text: str) -> tuple:
     return "", False
 
 
-def fetch_gov24() -> list:
+def fetch_gov24(profile: dict | None = None) -> list:
     """행정안전부 보조금24 — 개인 대상 복지·혜택 서비스 목록
     data.go.kr 데이터셋 15113968 — BOKJIRO_API_KEY(data.go.kr 계정 인증키) 사용.
-    미승인 상태에선 경고 로그만 남기고 빈 목록 반환.
+    profile이 주어지면 interests.keywords/categories로 사전 필터링.
     """
     api_key = BOKJIRO_API_KEY
     if not api_key:
         logger.warning("BOKJIRO_API_KEY 미설정 — 보조금24 API 생략")
         return []
+
+    # 프로필 키워드 필터 구성
+    interests = (profile or {}).get("interests", {})
+    include_kws = [k.lower() for k in interests.get("keywords", []) + interests.get("categories", [])]
+    exclude_kws = [k.lower() for k in interests.get("exclude_keywords", [])]
 
     base_url = "https://api.odcloud.kr/api/gov24/v3/serviceList"
     programs: list = []
@@ -1026,9 +866,6 @@ def fetch_gov24() -> list:
         if not items:
             break
 
-        if page == 1:
-            logger.info(f"보조금24 응답 필드: {sorted(items[0].keys())}")
-
         for item in items:
             title    = (item.get("서비스명") or "").strip()
             category = (item.get("서비스분야") or item.get("지원유형") or "복지혜택").strip()
@@ -1038,9 +875,24 @@ def fetch_gov24() -> list:
             if not title:
                 continue
 
-            # 현금·금전 지원이 아닌 서비스는 제외 (교육·상담·공간제공 등)
+            # 현금·금전 지원이 아닌 서비스 제외
             if not is_cash_support(title, category, amount, target):
                 continue
+
+            # 프로필 관심 키워드 필터
+            # gov24 서비스분야(category)는 대부분 범용 라벨("복지혜택" 등)이므로 제외.
+            # 제외 키워드는 title+target 전체에서, 포함 키워드는 지원대상(target) 필드에서만
+            # 매칭 — target이 실제 수급 자격을 명시하므로 가장 신뢰할 수 있는 필터.
+            if include_kws:
+                target_lower = target.lower()
+                title_lower  = title.lower()
+                check_text   = f"{title_lower} {target_lower}"
+                if exclude_kws and any(ex in check_text for ex in exclude_kws):
+                    continue
+                # target 필드 우선 매칭, 없으면 title에서 보완
+                if not (any(kw in target_lower for kw in include_kws)
+                        or any(kw in title_lower  for kw in include_kws)):
+                    continue
 
             deadline_raw = (item.get("신청기한") or "").strip()
             deadline, ongoing = _parse_gov24_deadline(deadline_raw)
@@ -1096,17 +948,11 @@ def fetch_all(context: dict) -> dict:
     logger.info("금융지원 데이터 수집 시작")
     BASE_OUTPUT.mkdir(exist_ok=True)
 
+    profile = context.get("profile", {})
     all_programs: list = []
 
-    # 복지로 API는 날짜 필드(servBgngYmd/servEndYmd)를 제공하지 않아
-    # is_eligible_by_period() 필터에서 전부 탈락하므로 호출하지 않음
-    # (GitHub Actions 미국 서버 → 한국 API 타임아웃의 원인이기도 함)
-
     logger.info("보조금24 (행정안전부) 수집 중...")
-    all_programs.extend(fetch_gov24())
-
-    logger.info("중소벤처24 API 수집 중...")
-    all_programs.extend(fetch_smes())
+    all_programs.extend(fetch_gov24(profile=profile))
 
     logger.info("서민금융진흥원 수집 중...")
     all_programs.extend(fetch_kinfa())
@@ -1144,7 +990,8 @@ def fetch_all(context: dict) -> dict:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    ctx = {"date": datetime.now().strftime("%Y%m%d"), "dry_run": "--test" in sys.argv}
+    profile = json.loads(Path("profile.json").read_text(encoding="utf-8")) if Path("profile.json").exists() else {}
+    ctx = {"date": datetime.now().strftime("%Y%m%d"), "dry_run": "--test" in sys.argv, "profile": profile}
     result = fetch_all(ctx)
     programs = result.get("programs", [])
     print(f"\n수집 결과: {len(programs)}건")

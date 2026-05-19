@@ -18,7 +18,7 @@ load_dotenv()
 
 BASE_OUTPUT    = Path("output")
 BATCH_SIZE     = 20
-MAX_FOR_CLAUDE = 40   # Claude로 보낼 최대 항목 수
+MAX_FOR_CLAUDE = 20   # Claude로 보낼 최대 항목 수
 MODEL          = "claude-sonnet-4-6"
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ def slim_for_claude(p: dict) -> dict:
     return {k: p[k] for k in ("id", "title", "agency", "category", "target", "amount", "deadline") if k in p}
 
 
-def build_user_prompt(programs: list, profile: dict) -> str:
+def build_user_prompt(programs: list, profile: dict, max_recommend: int = 4) -> str:
     slim_profile = {k: v for k, v in profile.items() if k != "_comment"}
     slim_programs = [slim_for_claude(p) for p in programs]
     return f"""## 사용자 프로필
@@ -49,10 +49,12 @@ def build_user_prompt(programs: list, profile: dict) -> str:
     "recommended": true 또는 false
   }}
 ]
-score >= 60이면 recommended = true로 설정하세요."""
+전체 목록에서 프로필에 실제로 적합하고 지금 당장 도움이 되는 사업만
+최대 {max_recommend}건에만 recommended = true를 부여하세요.
+자격 요건 미달, 금액이 미미하거나, 이미 중복·유사한 사업이 있으면 recommended = false로 두세요."""
 
 
-def analyze_batch(client: anthropic.Anthropic, programs: list, profile: dict) -> list:
+def analyze_batch(client: anthropic.Anthropic, programs: list, profile: dict, max_recommend: int = 4) -> list:
     """단일 배치를 Claude API로 분석하고 결과 반환"""
     if not programs:
         return []
@@ -79,7 +81,7 @@ def analyze_batch(client: anthropic.Anthropic, programs: list, profile: dict) ->
                     "cache_control": {"type": "ephemeral"},  # 프롬프트 캐싱으로 비용 절감
                 }
             ],
-            messages=[{"role": "user", "content": build_user_prompt(programs, profile)}],
+            messages=[{"role": "user", "content": build_user_prompt(programs, profile, max_recommend)}],
         )
 
         raw = resp.content[0].text.strip()
@@ -154,10 +156,11 @@ def prefilter(programs: list, profile: dict) -> list:
 
 def analyze_programs(context: dict) -> dict:
     """하네스에서 호출하는 메인 분석 함수"""
-    profile   = context.get("profile", {})
-    programs  = context.get("programs", [])
-    today_str = context.get("date", datetime.now().strftime("%Y%m%d"))
-    dry_run   = context.get("dry_run", False)
+    profile      = context.get("profile", {})
+    programs     = context.get("programs", [])
+    today_str    = context.get("date", datetime.now().strftime("%Y%m%d"))
+    dry_run      = context.get("dry_run", False)
+    max_recommend = profile.get("notification", {}).get("max_items", 4)
 
     BASE_OUTPUT.mkdir(exist_ok=True)
 
@@ -219,7 +222,7 @@ def analyze_programs(context: dict) -> dict:
         batch_num  = i // BATCH_SIZE + 1
         logger.info(f"배치 {batch_num}/{total_batches} 처리 ({len(batch)}건)")
 
-        batch_results = analyze_batch(client, batch, profile)
+        batch_results = analyze_batch(client, batch, profile, max_recommend)
         for result in batch_results:
             original = id_to_program.get(result.get("id", ""), {})
             all_results.append({**original, **result})
