@@ -129,10 +129,13 @@ def fetch_bokjiro_api() -> list:
 
     url = "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations/LcgvWelfarelist"
     programs = []
+    consecutive_failures = 0
 
-    # 생애주기 × 관심주제 조합으로 수집
     for life_code in BOKJIRO_LIFE_CODES:
         for theme_code in BOKJIRO_THEME_CODES:
+            if consecutive_failures >= 3:
+                logger.warning("복지로 지자체 API 연속 실패 3회 — 나머지 조합 생략")
+                return programs
             try:
                 params = {
                     "serviceKey": BOKJIRO_API_KEY,
@@ -141,10 +144,12 @@ def fetch_bokjiro_api() -> list:
                     "lifeArray":  life_code,
                     "intrsThemaArray": theme_code,
                 }
-                resp = retry_request(url, params=params, timeout=20, max_retries=2)
+                resp = retry_request(url, params=params, timeout=10, max_retries=1)
                 programs.extend(_parse_bokjiro_xml(resp.text))
+                consecutive_failures = 0
                 time.sleep(0.3)
             except Exception as e:
+                consecutive_failures += 1
                 logger.warning(f"복지로 API (생애{life_code}/주제{theme_code}) 실패: {e}")
 
     logger.info(f"복지로 지자체 API: {len(programs)}건")
@@ -161,9 +166,13 @@ def fetch_national_welfare_api() -> list:
 
     url = "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001/NationalWelfarelistV001"
     programs = []
+    consecutive_failures = 0
 
     for life_code in BOKJIRO_LIFE_CODES:
         for theme_code in BOKJIRO_THEME_CODES:
+            if consecutive_failures >= 3:
+                logger.warning("복지로 중앙부처 API 연속 실패 3회 — 나머지 조합 생략")
+                return programs
             try:
                 params = {
                     "serviceKey":      BOKJIRO_API_KEY,
@@ -174,7 +183,7 @@ def fetch_national_welfare_api() -> list:
                     "lifeArray":       life_code,
                     "intrsThemaArray": theme_code,
                 }
-                resp = retry_request(url, params=params, timeout=20, max_retries=2)
+                resp = retry_request(url, params=params, timeout=10, max_retries=1)
                 try:
                     root = ET.fromstring(resp.text)
                 except ET.ParseError:
@@ -955,11 +964,9 @@ def fetch_all(context: dict) -> dict:
 
     all_programs: list = []
 
-    logger.info("복지로 지자체복지서비스 API 수집 중...")
-    all_programs.extend(fetch_bokjiro_api())
-
-    logger.info("복지로 중앙부처복지서비스 API 수집 중...")
-    all_programs.extend(fetch_national_welfare_api())
+    # 복지로 API는 날짜 필드(servBgngYmd/servEndYmd)를 제공하지 않아
+    # is_eligible_by_period() 필터에서 전부 탈락하므로 호출하지 않음
+    # (GitHub Actions 미국 서버 → 한국 API 타임아웃의 원인이기도 함)
 
     logger.info("중소벤처24 API 수집 중...")
     all_programs.extend(fetch_smes())
