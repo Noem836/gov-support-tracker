@@ -16,19 +16,27 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_OUTPUT = Path("output")
-BATCH_SIZE  = 20
-MODEL       = "claude-sonnet-4-6"
+BASE_OUTPUT    = Path("output")
+BATCH_SIZE     = 20
+MAX_FOR_CLAUDE = 40   # Claude로 보낼 최대 항목 수
+MODEL          = "claude-sonnet-4-6"
 
 logger = logging.getLogger(__name__)
 
 
+def slim_for_claude(p: dict) -> dict:
+    """Claude 전송 전 필수 필드만 추출 (토큰 절감)"""
+    return {k: p[k] for k in ("id", "title", "agency", "category", "target", "amount", "deadline") if k in p}
+
+
 def build_user_prompt(programs: list, profile: dict) -> str:
+    slim_profile = {k: v for k, v in profile.items() if k != "_comment"}
+    slim_programs = [slim_for_claude(p) for p in programs]
     return f"""## 사용자 프로필
-{json.dumps(profile, ensure_ascii=False, indent=2)}
+{json.dumps(slim_profile, ensure_ascii=False)}
 
 ## 분석할 지원사업 목록
-{json.dumps(programs, ensure_ascii=False, indent=2)}
+{json.dumps(slim_programs, ensure_ascii=False)}
 
 ## 응답 형식 (반드시 순수 JSON 배열만 출력, 다른 텍스트 금지)
 [
@@ -97,14 +105,19 @@ def analyze_batch(client: anthropic.Anthropic, programs: list, profile: dict) ->
 
 def prefilter(programs: list, profile: dict) -> list:
     """관심 키워드 기반 1차 필터링으로 API 비용 절감"""
-    interests    = profile.get("interests", {})
-    keywords     = [k.lower() for k in interests.get("keywords", [])]
-    exclude_kws  = [k.lower() for k in interests.get("exclude_keywords", [])]
+    interests   = profile.get("interests", {})
+    keywords    = [k.lower() for k in interests.get("keywords", [])]
+    categories  = [c.lower() for c in interests.get("categories", [])]
+    exclude_kws = [k.lower() for k in interests.get("exclude_keywords", [])]
+    positive_kw = keywords + categories
 
     result = []
     for p in programs:
         text = f"{p.get('title','')} {p.get('category','')} {p.get('target','')}".lower()
         if exclude_kws and any(ex in text for ex in exclude_kws):
+            continue
+        # 관심 키워드/카테고리 중 하나라도 매칭되어야 통과
+        if positive_kw and not any(kw in text for kw in positive_kw):
             continue
         result.append(p)
     return result
@@ -163,6 +176,10 @@ def analyze_programs(context: dict) -> dict:
 
     filtered_programs = prefilter(programs, profile)
     logger.info(f"1차 필터링 후: {len(filtered_programs)}건")
+
+    if len(filtered_programs) > MAX_FOR_CLAUDE:
+        filtered_programs = filtered_programs[:MAX_FOR_CLAUDE]
+        logger.info(f"Claude 전송 대상을 {MAX_FOR_CLAUDE}건으로 제한")
 
     id_to_program = {p["id"]: p for p in programs}
     all_results: list = []

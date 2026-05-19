@@ -130,7 +130,7 @@ def fetch_bokjiro_api() -> list:
                 params = {
                     "serviceKey": BOKJIRO_API_KEY,
                     "pageNo":     "1",
-                    "numOfRows":  "30",
+                    "numOfRows":  "10",
                     "lifeArray":  life_code,
                     "intrsThemaArray": theme_code,
                 }
@@ -162,7 +162,7 @@ def fetch_national_welfare_api() -> list:
                     "serviceKey":      BOKJIRO_API_KEY,
                     "callTp":          "L",
                     "pageNo":          "1",
-                    "numOfRows":       "30",
+                    "numOfRows":       "10",
                     "srchKeyCode":     "003",
                     "lifeArray":       life_code,
                     "intrsThemaArray": theme_code,

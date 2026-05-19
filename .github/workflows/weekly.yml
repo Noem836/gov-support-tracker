@@ -26,17 +26,11 @@ jobs:
 
       - name: .env 파일 생성 (GitHub Secrets → 환경변수)
         run: |
-          cat > .env << 'EOF'
-          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-          OPEN_DATA_API_KEY=${{ secrets.OPEN_DATA_API_KEY }}
-          SMES_API_KEY=${{ secrets.SMES_API_KEY }}
-          BOKJIRO_API_KEY=${{ secrets.BOKJIRO_API_KEY }}
-          NOTION_API_KEY=${{ secrets.NOTION_API_KEY }}
-          NOTION_PAGE_ID=${{ secrets.NOTION_PAGE_ID }}
-          GMAIL_USER=
-          GMAIL_APP_PASSWORD=
-          SLACK_WEBHOOK_URL=
-          EOF
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+          echo "OPEN_DATA_API_KEY=${{ secrets.OPEN_DATA_API_KEY }}" >> .env
+          echo "BOKJIRO_API_KEY=${{ secrets.BOKJIRO_API_KEY }}" >> .env
+          echo "NOTION_API_KEY=${{ secrets.NOTION_API_KEY }}" >> .env
+          echo "NOTION_PAGE_ID=${{ secrets.NOTION_PAGE_ID }}" >> .env
 
       - name: 하네스 실행 (수집 → 분석 → Notion 발송)
         run: python harness.py
