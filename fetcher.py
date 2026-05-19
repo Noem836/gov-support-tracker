@@ -837,6 +837,9 @@ def fetch_gov24(profile: dict | None = None) -> list:
     include_kws = [k.lower() for k in interests.get("keywords", []) + interests.get("categories", [])]
     exclude_kws = [k.lower() for k in interests.get("exclude_keywords", [])]
 
+    MAX_RESULTS = 200  # 필터 통과 항목이 이 수에 도달하면 조기 종료
+    MAX_PAGES   = 50   # 페이지 상한 (API 총량 무관하게 최대 5,000건 스캔)
+
     base_url = "https://api.odcloud.kr/api/gov24/v3/serviceList"
     programs: list = []
     page = 1
@@ -921,8 +924,11 @@ def fetch_gov24(profile: dict | None = None) -> list:
                 "fetched_at": datetime.now().isoformat(),
             })
 
+        if len(programs) >= MAX_RESULTS:
+            logger.info(f"보조금24: 매칭 {MAX_RESULTS}건 도달 — 조기 종료")
+            break
         total = int(data.get("totalCount") or data.get("total") or 0)
-        if not total or len(programs) >= total:
+        if not total or page >= MAX_PAGES:
             break
         page += 1
         time.sleep(0.3)
