@@ -95,7 +95,7 @@ def fetch_bokjiro_api() -> list:
                 "numOfRows": "100",
                 "srchKeyCode": code,
             }
-            resp = retry_request(url, params=params, timeout=30)
+            resp = retry_request(url, params=params, timeout=20, max_retries=1)
 
             try:
                 data = resp.json()
@@ -261,10 +261,16 @@ def fetch_work24() -> list:
     programs = []
 
     try:
-        resp = retry_request("https://www.work24.go.kr/cm/c/f/1100/selecPolicyList.do", timeout=25)
+        resp = retry_request(
+            "https://www.work24.go.kr/cm/c/f/1100/selecPolicyList.do",
+            params={"systClId": "SC00000028", "currentPageNo": 1, "recordCountPerPage": 20},
+            timeout=25,
+        )
         soup = BeautifulSoup(resp.text, "lxml")
         items = (
-            soup.select("ul.policy-list li")
+            soup.select(".policy-list li")
+            or soup.select(".policy-item")
+            or soup.select("ul.list li")
             or soup.select(".support-list .item")
             or soup.select("table tbody tr")
         )
@@ -348,84 +354,8 @@ def fetch_work24() -> list:
 # ─── 소스 5: 중소벤처24 API ──────────────────────────────────────────────────────
 
 def fetch_smes() -> list:
-    """중소벤처24 — 금융지원 분야 사업 공고 수집"""
-    if not SMES_API_KEY:
-        logger.warning("SMES_API_KEY 미설정 — 중소벤처24 API 생략")
-        return []
-
-    programs = []
-
-    # 기업마당 RSS API (금융·창업 분야) — smes.go.kr 엔드포인트 교체
-    endpoints = [
-        "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do",
-        "https://apis.data.go.kr/1051000/bizSuppInfoService/getBizSuppInfo",
-    ]
-
-    financial_keywords = ["금융", "융자", "대출", "보증", "보조금", "지원금", "바우처", "수당", "보상"]
-
-    for url in endpoints:
-        try:
-            params = {
-                "serviceKey": SMES_API_KEY,
-                "pageNo": 1,
-                "numOfRows": 100,
-                "type": "json",
-            }
-            resp = retry_request(url, params=params, timeout=25)
-
-            try:
-                data = resp.json()
-            except Exception:
-                logger.warning(f"중소벤처24 JSON 파싱 실패: {url}")
-                continue
-
-            # 응답 구조 파싱
-            items = []
-            if isinstance(data, dict):
-                body = data.get("response", data).get("body", data)
-                raw = body.get("items", body.get("data", []))
-                if isinstance(raw, dict):
-                    items = raw.get("item", [])
-                elif isinstance(raw, list):
-                    items = raw
-            if isinstance(items, dict):
-                items = [items]
-
-            count = 0
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                title = item.get("pbanc_nm") or item.get("pbancNm") or item.get("title") or ""
-                category = item.get("biz_trgt_cd_nm") or item.get("category") or ""
-
-                # 금융 관련 항목만 필터링
-                text = f"{title} {category}".replace(" ", "")
-                if not any(kw in text for kw in financial_keywords):
-                    continue
-
-                deadline_raw = item.get("rcpt_end_ymd") or item.get("rcptEndYmd") or ""
-                programs.append({
-                    "id": make_id("smes", str(item.get("pbanc_no") or item.get("pbancNo") or title)),
-                    "title": title,
-                    "agency": item.get("supt_inst_nm") or item.get("suptInstNm") or "중소벤처기업부",
-                    "category": category or "금융지원",
-                    "target": item.get("biz_trgt_desc") or "",
-                    "amount": item.get("supt_amt_desc") or item.get("suptAmtDesc") or "",
-                    "deadline": str(deadline_raw)[:10],
-                    "region": item.get("supt_regin_nm") or "전국",
-                    "url": item.get("dtl_pg_url") or "",
-                    "source": "중소벤처24",
-                    "fetched_at": datetime.now().isoformat(),
-                })
-                count += 1
-
-            logger.info(f"중소벤처24 ({url.split('/')[-1]}): {count}건 (금융 필터)")
-            break  # 첫 번째 성공한 엔드포인트에서 중단
-
-        except Exception as e:
-            logger.warning(f"중소벤처24 API 실패 ({url.split('/')[-1]}): {e}")
-
-    return programs
+    """중소벤처24 — fetch_bizinfo_financial()과 동일 소스, API 인증 필요로 비활성"""
+    return []
 
 
 # ─── 소스 6: 긴급복지 / 재난·피해 지원 ──────────────────────────────────────────
@@ -618,12 +548,13 @@ def fetch_arko() -> list:
 
     # 공모·지원사업 목록 스크래핑
     try:
-        resp = retry_request("https://www.arko.or.kr/board/list/4014", timeout=25)
+        resp = retry_request("https://thearts.arko.or.kr/thearts/news/contest", timeout=25)
         soup = BeautifulSoup(resp.text, "lxml")
         items = (
-            soup.select(".board-list tbody tr")
+            soup.select("ul.list-wrap li")
+            or soup.select(".contest-list li")
+            or soup.select(".board-list li")
             or soup.select("ul.list li")
-            or soup.select(".support-list li")
             or soup.select("table tbody tr")
         )
         count = 0
@@ -633,11 +564,16 @@ def fetch_arko() -> list:
                 continue
             title = link.get_text(strip=True)
             href = link.get("href", "")
-            if href.startswith("/"):
-                href = "https://www.arko.or.kr" + href
+            if not href.startswith("http"):
+                href = "https://thearts.arko.or.kr" + href
 
-            if not is_cash_support(title, "예술지원금"):
-                continue
+            period_tag = item.find(class_=lambda x: x and any(k in str(x) for k in ["period", "date", "term"]))
+            deadline = ""
+            if period_tag:
+                text = period_tag.get_text(strip=True)
+                parts = text.split("~")
+                if len(parts) == 2:
+                    deadline = parts[-1].strip()[:10].replace(".", "-")
 
             programs.append({
                 "id": make_id("arko", href),
@@ -646,7 +582,7 @@ def fetch_arko() -> list:
                 "category": "예술활동지원",
                 "target": "예술인·예술단체",
                 "amount": "",
-                "deadline": "",
+                "deadline": deadline,
                 "region": "전국",
                 "url": href,
                 "source": "예술위원회",
@@ -710,13 +646,16 @@ def fetch_youth_portal() -> list:
 
     try:
         resp = retry_request(
-            "https://www.youth.go.kr/youth/policy/youthPolicyList.do",
-            params={"pageIndex": 1, "pageUnit": 100},
+            "https://www.youthcenter.go.kr/youthPolicy/ythPlcyTotalSearch",
             timeout=25,
         )
         soup = BeautifulSoup(resp.text, "lxml")
-        items = soup.select(".policy-list li") or soup.select("table tbody tr")
-
+        items = (
+            soup.select(".policy-list li")
+            or soup.select(".policy-item")
+            or soup.select("ul.list li")
+            or soup.select("table tbody tr")
+        )
         count = 0
         for item in items:
             link = item.find("a", href=True)
@@ -725,7 +664,7 @@ def fetch_youth_portal() -> list:
             title = link.get_text(strip=True)
             href = link.get("href", "")
             if href.startswith("/"):
-                href = "https://www.youth.go.kr" + href
+                href = "https://www.youthcenter.go.kr" + href
 
             desc = item.find("p") or item.find(class_=lambda x: x and "desc" in str(x))
             amount = desc.get_text(strip=True)[:100] if desc else ""
@@ -757,7 +696,7 @@ def fetch_youth_portal() -> list:
             "title": "청년 월세 한시 특별지원",
             "amount": "월 최대 20만원, 최대 12개월 (총 240만원)",
             "target": "만 19~34세, 독립거주 청년 (부모와 별거, 소득기준 충족)",
-            "url": "https://www.youth.go.kr/youth/policy/youthPolicyDetail.do",
+            "url": "https://www.youthcenter.go.kr/youthPolicy/ythPlcyInfoMain",
             "category": "주거비지원",
         },
         {
@@ -771,7 +710,7 @@ def fetch_youth_portal() -> list:
             "title": "청년도약계좌",
             "amount": "월 40~70만원 납입 시 정부 기여금 최대 월 2.4만원 + 비과세 이자",
             "target": "만 19~34세, 개인소득 6,000만원 이하",
-            "url": "https://www.youth.go.kr",
+            "url": "https://www.youthcenter.go.kr/youthPolicy/ythPlcyInfoMain",
             "category": "자산형성지원",
         },
         {
