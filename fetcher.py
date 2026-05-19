@@ -23,6 +23,7 @@ load_dotenv()
 BASE_OUTPUT = Path("output")
 OPEN_DATA_API_KEY = os.getenv("OPEN_DATA_API_KEY", "")
 SMES_API_KEY = os.getenv("SMES_API_KEY", "")
+BOKJIRO_API_KEY = os.getenv("BOKJIRO_API_KEY", "")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -38,12 +39,17 @@ CASH_KEYWORDS = [
     "창업자금", "R&D", "사업화", "정착금", "이주비", "훈련비", "교육비",
 ]
 
-BOKJIRO_CATEGORIES = {
-    "001": "생활안정",
-    "002": "주거",
-    "004": "의료",
-    "008": "고용/창업",
-    "009": "보호/돌봄",
+BOKJIRO_LIFE_CODES = {
+    "003": "청소년",
+    "004": "청년",
+    "005": "중장년",
+}
+BOKJIRO_THEME_CODES = {
+    "030": "생활지원",
+    "040": "주거",
+    "050": "일자리",
+    "100": "교육",
+    "130": "서민금융",
 }
 
 logger = logging.getLogger(__name__)
@@ -75,86 +81,122 @@ def make_id(source: str, raw_key: str) -> str:
     return hashlib.md5(f"{source}:{raw_key}".encode()).hexdigest()[:12]
 
 
-# ─── 소스 1: 복지로 API ────────────────────────────────────────────────────────
+# ─── 소스 1: 복지로 지자체복지서비스 API ──────────────────────────────────────────
+
+import xml.etree.ElementTree as ET
+
+def _parse_bokjiro_xml(xml_text: str) -> list:
+    """복지로 XML 응답 → 사업 목록"""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    items = []
+    for s in root.findall(".//servList"):
+        t = lambda tag: (s.findtext(tag) or "").strip()
+        serv_id = t("servId")
+        title   = t("servNm")
+        if not title:
+            continue
+        items.append({
+            "id":         make_id("bokjiro", serv_id or title),
+            "title":      title,
+            "agency":     t("bizChrDeptNm"),
+            "category":   t("intrsThemaNmArray") or "복지",
+            "target":     t("trgterIndvdlNmArray"),
+            "amount":     t("sprtCycNm"),
+            "deadline":   "",
+            "region":     t("ctpvNm") or t("sggNm") or "지자체",
+            "url":        t("servDtlLink"),
+            "source":     "복지로",
+            "fetched_at": datetime.now().isoformat(),
+        })
+    return items
+
 
 def fetch_bokjiro_api() -> list:
-    """복지로 API — 생활안정/의료/주거/고용 복지서비스 수집"""
-    if not OPEN_DATA_API_KEY:
-        logger.warning("OPEN_DATA_API_KEY 미설정 — 복지로 API 생략")
+    """복지로 지자체복지서비스 API (한국사회보장정보원)"""
+    if not BOKJIRO_API_KEY:
+        logger.warning("BOKJIRO_API_KEY 미설정 — 복지로 API 생략")
         return []
 
-    api_key = unquote(OPEN_DATA_API_KEY)
-    url = "https://apis.data.go.kr/B554287/NationalWelfareInformationsService/getNationalWelfareList"
+    url = "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations/LcgvWelfarelist"
     programs = []
 
-    for code, category_name in BOKJIRO_CATEGORIES.items():
-        try:
-            params = {
-                "serviceKey": api_key,
-                "pageNo": "1",
-                "numOfRows": "100",
-                "srchKeyCode": code,
-            }
-            resp = retry_request(url, params=params, timeout=20, max_retries=1)
-
+    # 생애주기 × 관심주제 조합으로 수집
+    for life_code in BOKJIRO_LIFE_CODES:
+        for theme_code in BOKJIRO_THEME_CODES:
             try:
-                data = resp.json()
-            except Exception:
-                logger.warning(f"복지로 {category_name} JSON 파싱 실패, 스킵")
-                continue
+                params = {
+                    "serviceKey": BOKJIRO_API_KEY,
+                    "pageNo":     "1",
+                    "numOfRows":  "30",
+                    "lifeArray":  life_code,
+                    "intrsThemaArray": theme_code,
+                }
+                resp = retry_request(url, params=params, timeout=20, max_retries=2)
+                programs.extend(_parse_bokjiro_xml(resp.text))
+                time.sleep(0.3)
+            except Exception as e:
+                logger.warning(f"복지로 API (생애{life_code}/주제{theme_code}) 실패: {e}")
 
-            # 복지로 API 응답 구조 파싱
-            items = []
-            if isinstance(data, dict):
-                body = data.get("wantedServiceList", {})
-                if not body:
-                    body = data.get("response", {}).get("body", {})
-                raw = body.get("wantedServiceInfo", body.get("items", []))
-                if isinstance(raw, dict):
-                    items = raw.get("wantedService", raw.get("item", []))
-                elif isinstance(raw, list):
-                    items = raw
-
-            if isinstance(items, dict):
-                items = [items]
-
-            count = 0
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                serv_id = item.get("servId", item.get("servCD", ""))
-                title = item.get("servNm", item.get("servName", ""))
-                if not title:
-                    continue
-                programs.append({
-                    "id": make_id("bokjiro", serv_id or title),
-                    "title": title,
-                    "agency": item.get("jurMnofNm", ""),
-                    "category": category_name,
-                    "target": item.get("tgtrDsc", item.get("tgtrDesc", "")),
-                    "amount": item.get("alwnInfo", item.get("alwInfo", "")),
-                    "deadline": "",
-                    "region": item.get("sido", "전국"),
-                    "url": item.get("wlfareInfoDtlLink", item.get("servDtlLink", "")),
-                    "source": "복지로",
-                    "fetched_at": datetime.now().isoformat(),
-                })
-                count += 1
-
-            logger.info(f"복지로 API {category_name}: {count}건")
-            time.sleep(0.5)
-
-        except Exception as e:
-            logger.warning(f"복지로 API {category_name} 실패: {e}")
-
+    logger.info(f"복지로 지자체 API: {len(programs)}건")
     return programs
 
 
-# ─── 소스 2: 복지로 웹 스크래핑 (API 폴백) ─────────────────────────────────────
+# ─── 소스 2: 복지로 중앙부처복지서비스 API ──────────────────────────────────────
 
-def fetch_bokjiro_scrape() -> list:
-    """복지로 웹 스크래핑 — 현재 비활성 (URL 구조 변경으로 404)"""
-    return []
+def fetch_national_welfare_api() -> list:
+    """복지로 중앙부처복지서비스 API (한국사회보장정보원)"""
+    if not BOKJIRO_API_KEY:
+        logger.warning("BOKJIRO_API_KEY 미설정 — 중앙부처복지서비스 API 생략")
+        return []
+
+    url = "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001/NationalWelfarelistV001"
+    programs = []
+
+    for life_code in BOKJIRO_LIFE_CODES:
+        for theme_code in BOKJIRO_THEME_CODES:
+            try:
+                params = {
+                    "serviceKey":      BOKJIRO_API_KEY,
+                    "callTp":          "L",
+                    "pageNo":          "1",
+                    "numOfRows":       "30",
+                    "srchKeyCode":     "003",
+                    "lifeArray":       life_code,
+                    "intrsThemaArray": theme_code,
+                }
+                resp = retry_request(url, params=params, timeout=20, max_retries=2)
+                try:
+                    root = ET.fromstring(resp.text)
+                except ET.ParseError:
+                    continue
+                for s in root.findall(".//servList"):
+                    t = lambda tag: (s.findtext(tag) or "").strip()
+                    serv_id = t("servId")
+                    title   = t("servNm")
+                    if not title:
+                        continue
+                    programs.append({
+                        "id":         make_id("national_welfare", serv_id or title),
+                        "title":      title,
+                        "agency":     t("jurMnofNm") or t("jurOrgNm"),
+                        "category":   t("intrsThemaArray") or "복지",
+                        "target":     t("trgterIndvdlArray"),
+                        "amount":     t("sprtCycNm"),
+                        "deadline":   "",
+                        "region":     "전국",
+                        "url":        t("servDtlLink"),
+                        "source":     "복지로(중앙부처)",
+                        "fetched_at": datetime.now().isoformat(),
+                    })
+                time.sleep(0.3)
+            except Exception as e:
+                logger.warning(f"중앙부처복지서비스 API (생애{life_code}/주제{theme_code}) 실패: {e}")
+
+    logger.info(f"복지로 중앙부처 API: {len(programs)}건")
+    return programs
 
 
 # ─── 소스 3: 서민금융진흥원 ────────────────────────────────────────────────────
@@ -882,13 +924,11 @@ def fetch_all(context: dict) -> dict:
 
     all_programs: list = []
 
-    logger.info("복지로 API 수집 중...")
-    bokjiro_api = fetch_bokjiro_api()
-    all_programs.extend(bokjiro_api)
+    logger.info("복지로 지자체복지서비스 API 수집 중...")
+    all_programs.extend(fetch_bokjiro_api())
 
-    if len(bokjiro_api) < 10:
-        logger.info("복지로 웹 스크래핑 중 (API 보완)...")
-        all_programs.extend(fetch_bokjiro_scrape())
+    logger.info("복지로 중앙부처복지서비스 API 수집 중...")
+    all_programs.extend(fetch_national_welfare_api())
 
     logger.info("중소벤처24 API 수집 중...")
     all_programs.extend(fetch_smes())
