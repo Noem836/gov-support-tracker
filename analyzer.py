@@ -103,6 +103,14 @@ def analyze_batch(client: anthropic.Anthropic, programs: list, profile: dict) ->
         return []
 
 
+def has_actionable_data(p: dict) -> bool:
+    """금액·대상·URL 중 최소 하나는 있어야 유용한 항목으로 판단"""
+    amount  = (p.get("amount") or "").strip()
+    target  = (p.get("target") or "").strip()
+    url     = (p.get("url") or "").strip()
+    return len(amount) > 3 or len(target) > 5 or len(url) > 10
+
+
 def prefilter(programs: list, profile: dict) -> list:
     """관심 키워드 기반 1차 필터링으로 API 비용 절감"""
     interests   = profile.get("interests", {})
@@ -113,6 +121,9 @@ def prefilter(programs: list, profile: dict) -> list:
 
     result = []
     for p in programs:
+        # 유효한 정보가 없는 항목 제외
+        if not has_actionable_data(p):
+            continue
         text = f"{p.get('title','')} {p.get('category','')} {p.get('target','')}".lower()
         if exclude_kws and any(ex in text for ex in exclude_kws):
             continue

@@ -104,7 +104,7 @@ def _parse_bokjiro_xml(xml_text: str) -> list:
             "agency":     t("bizChrDeptNm"),
             "category":   t("intrsThemaNmArray") or "복지",
             "target":     t("trgterIndvdlNmArray"),
-            "amount":     t("sprtCycNm"),
+            "amount":     "",  # 복지로 API는 금액 미제공 (sprtCycNm은 지원주기)
             "deadline":   "",
             "region":     t("ctpvNm") or t("sggNm") or "지자체",
             "url":        t("servDtlLink"),
@@ -184,7 +184,7 @@ def fetch_national_welfare_api() -> list:
                         "agency":     t("jurMnofNm") or t("jurOrgNm"),
                         "category":   t("intrsThemaArray") or "복지",
                         "target":     t("trgterIndvdlArray"),
-                        "amount":     t("sprtCycNm"),
+                        "amount":     "",  # 복지로 API는 금액 미제공
                         "deadline":   "",
                         "region":     "전국",
                         "url":        t("servDtlLink"),
