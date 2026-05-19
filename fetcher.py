@@ -153,60 +153,8 @@ def fetch_bokjiro_api() -> list:
 # ─── 소스 2: 복지로 웹 스크래핑 (API 폴백) ─────────────────────────────────────
 
 def fetch_bokjiro_scrape() -> list:
-    """복지로 웹 스크래핑 — API 실패 시 폴백"""
-    base_url = "https://www.bokjiro.go.kr/ssis-tbu/twataa/welfareInfo/moveTWAT52011M.do"
-    programs = []
-
-    for code, category_name in list(BOKJIRO_CATEGORIES.items())[:3]:  # 상위 3개 분야만
-        try:
-            params = {"srchKeyCode": code, "pageIndex": "1"}
-            resp = retry_request(base_url, params=params, timeout=30)
-            soup = BeautifulSoup(resp.text, "lxml")
-
-            items = (
-                soup.select("ul.welfare-list li")
-                or soup.select(".search-result-list li")
-                or soup.select("li.item")
-            )
-
-            count = 0
-            for item in items:
-                link = item.find("a", href=True)
-                if not link:
-                    continue
-                title = link.get_text(strip=True)
-                href = link.get("href", "")
-                if href.startswith("/"):
-                    href = "https://www.bokjiro.go.kr" + href
-
-                agency_tag = item.find(class_=lambda x: x and any(k in x for k in ["dept", "agency", "org"]))
-                agency = agency_tag.get_text(strip=True) if agency_tag else ""
-
-                desc_tag = item.find("p") or item.find(class_=lambda x: x and "desc" in str(x))
-                amount = desc_tag.get_text(strip=True)[:100] if desc_tag else ""
-
-                programs.append({
-                    "id": make_id("bokjiro_web", href),
-                    "title": title,
-                    "agency": agency,
-                    "category": category_name,
-                    "target": "",
-                    "amount": amount,
-                    "deadline": "",
-                    "region": "전국",
-                    "url": href,
-                    "source": "복지로",
-                    "fetched_at": datetime.now().isoformat(),
-                })
-                count += 1
-
-            logger.info(f"복지로 스크래핑 {category_name}: {count}건")
-            time.sleep(1)
-
-        except Exception as e:
-            logger.warning(f"복지로 스크래핑 {category_name} 실패: {e}")
-
-    return programs
+    """복지로 웹 스크래핑 — 현재 비활성 (URL 구조 변경으로 404)"""
+    return []
 
 
 # ─── 소스 3: 서민금융진흥원 ────────────────────────────────────────────────────
@@ -313,7 +261,7 @@ def fetch_work24() -> list:
     programs = []
 
     try:
-        resp = retry_request("https://www.work24.go.kr/cm/c/a103/selectCmCa103List.do", timeout=25)
+        resp = retry_request("https://www.work24.go.kr/cm/c/f/1100/selecPolicyList.do", timeout=25)
         soup = BeautifulSoup(resp.text, "lxml")
         items = (
             soup.select("ul.policy-list li")
@@ -381,7 +329,7 @@ def fetch_work24() -> list:
     for item in fixed:
         if item["title"] not in existing_titles:
             programs.append({
-                "id": make_id("work24_fixed", item["url"]),
+                "id": make_id("work24_fixed", item["url"] + item["title"]),
                 "title": item["title"],
                 "agency": "고용노동부",
                 "category": item["category"],
@@ -407,9 +355,9 @@ def fetch_smes() -> list:
 
     programs = []
 
-    # 중소벤처24 공고 API (금융 분야 필터)
+    # 기업마당 RSS API (금융·창업 분야) — smes.go.kr 엔드포인트 교체
     endpoints = [
-        "https://www.smes.go.kr/openapi/api/pbanc/getPbancInfo.do",
+        "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do",
         "https://apis.data.go.kr/1051000/bizSuppInfoService/getBizSuppInfo",
     ]
 
@@ -606,7 +554,7 @@ def is_cash_support(title: str, category: str = "", amount: str = "", target: st
 
 def fetch_bizinfo_financial() -> list:
     """기업마당 — 금융·창업 카테고리 공고 (현금지원 필터 적용)"""
-    base_url = "https://www.bizinfo.go.kr/web/lay1/S1T122C128/AS/74/list.do"
+    base_url = "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/list.do"
     # pBizSe: 01=금융, 06=창업, 07=R&D (현금 지원 포함 카테고리만)
     categories = [("01", "금융"), ("06", "창업"), ("07", "R&D")]
     programs = []
@@ -670,12 +618,13 @@ def fetch_arko() -> list:
 
     # 공모·지원사업 목록 스크래핑
     try:
-        resp = retry_request("https://www.arko.or.kr/business/category/list.do", timeout=25)
+        resp = retry_request("https://www.arko.or.kr/board/list/4014", timeout=25)
         soup = BeautifulSoup(resp.text, "lxml")
         items = (
             soup.select(".board-list tbody tr")
             or soup.select("ul.list li")
             or soup.select(".support-list li")
+            or soup.select("table tbody tr")
         )
         count = 0
         for item in items:

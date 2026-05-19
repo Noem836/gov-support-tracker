@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 GMAIL_USER        = os.getenv("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
-NOTION_API_KEY    = os.getenv("NOTION_API_KEY", "")
-NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
+NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
+NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID", "")
 
 
 # ─── 헬퍼 ────────────────────────────────────────────────────────────────────
@@ -282,15 +282,33 @@ def send_slack(programs: list, total_fetched: int) -> bool:
         return False
 
 
+import re as _re
+
+
 def _notion_rich_text(text: str) -> list:
     return [{"type": "text", "text": {"content": str(text)[:2000]}}]
 
 
-def _notion_blocks(p: dict) -> list:
-    """사업 상세 내용을 Notion 블록 리스트로 변환"""
+def _make_notion_title(p: dict) -> str:
+    """'사업명 (신청기간~마감일)' 형식 제목 생성"""
+    title    = p.get("title", "(제목 없음)")[:80]
+    start    = p.get("start_date", "")
+    deadline = p.get("deadline", "")
+
+    if start and deadline:
+        s = start.replace("-", ".")
+        e = deadline.replace("-", ".")
+        return f"{title} ({s}~{e})"
+    elif deadline:
+        e = deadline.replace("-", ".")
+        return f"{title} (~{e})"
+    return title
+
+
+def _notion_page_blocks(p: dict) -> list:
+    """사업 상세를 Notion 블록으로 변환 (페이지 내부)"""
     dl      = p.get("deadline", "")
     score   = p.get("score", 0)
-    days    = days_until(dl) if dl else None
     d_label = deadline_label(dl)
 
     def divider():
@@ -320,62 +338,99 @@ def _notion_blocks(p: dict) -> list:
             for item in items
         ]
 
-    blocks = [
-        # 기본 정보 섹션
+    return [
         heading("📋 기본 정보"),
         *bullet([
             f"🏢 주관기관: {p.get('agency', '미정')}",
             f"📂 분야: {p.get('category', '미정')}",
             f"🌏 지역: {p.get('region', '전국')}",
             f"💰 지원금액: {p.get('amount', '확인 필요')}",
-            f"📅 신청기간: {p.get('start_date', '')} ~ {dl or '미정'}  ({d_label})",
+            f"📅 신청기간: {p.get('start_date', '미정')} ~ {dl or '미정'}  ({d_label})",
         ]),
         divider(),
-
-        # AI 분석 섹션
-        heading("🤖 AI 분석 결과"),
+        heading("🤖 AI 분석"),
         *bullet([f"적합도 점수: {score}점"]),
         callout(p.get("reason", ""), "⭐"),
         para(f"💡 핵심 혜택: {p.get('highlight', '')}"),
         divider(),
-
-        # 액션 섹션
         heading("🚀 다음 행동"),
         callout(p.get("action", "상세 페이지 확인 후 신청 여부 결정"), "🚀"),
         divider(),
-
-        # 링크 섹션
         heading("🔗 신청 링크"),
         para(p.get("url", "")),
     ]
-    return blocks
 
 
-def _make_notion_title(p: dict) -> str:
-    """'사업명 (시작일~마감일)' 형식 제목 생성"""
-    title    = p.get("title", "(제목 없음)")[:80]
-    start    = p.get("start_date", "")
-    deadline = p.get("deadline", "")
+def _get_notion_child_pages(headers: dict) -> list[dict]:
+    """부모 페이지의 자식 페이지 블록 목록을 페이지네이션하여 전부 반환"""
+    pages, cursor = [], None
+    while True:
+        params = {"page_size": 100}
+        if cursor:
+            params["start_cursor"] = cursor
+        try:
+            resp = requests.get(
+                f"https://api.notion.com/v1/blocks/{NOTION_PAGE_ID}/children",
+                headers=headers,
+                params=params,
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            for block in data.get("results", []):
+                if block.get("type") == "child_page":
+                    pages.append(block)
+            if not data.get("has_more"):
+                break
+            cursor = data.get("next_cursor")
+        except Exception as e:
+            logger.warning(f"자식 페이지 목록 조회 실패: {e}")
+            break
+    return pages
 
-    if start and deadline:
-        # "2026-05-17" → "2026.05.17" 형식
-        s = start.replace("-", ".")
-        e = deadline.replace("-", ".")
-        return f"{title} ({s}~{e})"
-    elif deadline:
-        e = deadline.replace("-", ".")
-        return f"{title} (~{e})"
-    return title
+
+def _deadline_from_title(title: str) -> str | None:
+    """제목 '사업명 (~2026.06.30)' 에서 마감일 추출 → 'YYYY-MM-DD'"""
+    m = _re.search(r'~(\d{4})\.(\d{2})\.(\d{2})', title)
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
+
+
+def _cleanup_expired_pages(headers: dict) -> int:
+    """마감일이 오늘보다 이전인 자식 페이지를 아카이브(삭제)"""
+    today   = date.today()
+    removed = 0
+    for block in _get_notion_child_pages(headers):
+        title    = block.get("child_page", {}).get("title", "")
+        deadline = _deadline_from_title(title)
+        if not deadline:
+            continue
+        try:
+            if date.fromisoformat(deadline) < today:
+                resp = requests.patch(
+                    f"https://api.notion.com/v1/pages/{block['id']}",
+                    headers=headers,
+                    json={"archived": True},
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    removed += 1
+                    logger.info(f"만료 페이지 삭제: {title}")
+                else:
+                    logger.warning(f"삭제 실패 ({block['id']}): {resp.text[:100]}")
+        except Exception as e:
+            logger.warning(f"만료 체크 실패 ({title}): {e}")
+    return removed
 
 
 def send_notion(programs: list) -> bool:
-    """Notion 데이터베이스에 추천 사업 페이지 생성
+    """Notion 페이지에 자식 페이지로 추천 사업 추가 + 만료 항목 자동 삭제
 
     제목 형식: '사업명 (2026.05.17~2026.06.30)'
-    페이지 내부: 기본정보 / AI분석 / 다음행동 / 신청링크 블록
+    페이지 내부: 기본정보 / AI분석 / 다음행동 / 신청링크
     """
-    if not NOTION_API_KEY or not NOTION_DATABASE_ID:
-        logger.warning("NOTION_API_KEY 또는 NOTION_DATABASE_ID 미설정")
+    if not NOTION_API_KEY or not NOTION_PAGE_ID:
+        logger.warning("NOTION_API_KEY 또는 NOTION_PAGE_ID 미설정")
         return False
 
     headers = {
@@ -384,30 +439,18 @@ def send_notion(programs: list) -> bool:
         "Notion-Version": "2022-06-28",
     }
 
+    removed = _cleanup_expired_pages(headers)
+    if removed:
+        logger.info(f"만료 페이지 {removed}건 삭제 완료")
+
     success = 0
     for p in programs:
         page_title = _make_notion_title(p)
-
-        # 데이터베이스 속성 (열)
-        props: dict = {
-            "이름": {"title": [{"text": {"content": page_title}}]},
-            "적합도": {"number": p.get("score", 0)},
-        }
-        if p.get("agency"):
-            props["기관"] = {"rich_text": _notion_rich_text(p["agency"][:100])}
-        if p.get("deadline"):
-            props["마감일"] = {"date": {"start": p["deadline"]}}
-        if p.get("url"):
-            props["신청링크"] = {"url": p["url"]}
-        if p.get("category"):
-            props["분야"] = {"rich_text": _notion_rich_text(p["category"][:100])}
-
         payload = {
-            "parent":   {"database_id": NOTION_DATABASE_ID},
-            "properties": props,
-            "children": _notion_blocks(p),
+            "parent":     {"page_id": NOTION_PAGE_ID},
+            "properties": {"title": {"title": [{"text": {"content": page_title}}]}},
+            "children":   _notion_page_blocks(p),
         }
-
         try:
             resp = requests.post(
                 "https://api.notion.com/v1/pages",
@@ -485,7 +528,7 @@ def send_notification(context: dict) -> dict:
     if notif_cfg.get("slack") and SLACK_WEBHOOK_URL:
         results["slack"] = send_slack(recommended, raw_count)
 
-    if notif_cfg.get("notion") and NOTION_API_KEY:
+    if notif_cfg.get("notion") and NOTION_API_KEY and NOTION_PAGE_ID:
         results["notion"] = send_notion(recommended)
 
     context["notification_sent"]    = any(results.values())

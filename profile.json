@@ -3,28 +3,28 @@
 
   "basic": {
     "type": "개인",
-    "age": 30,
-    "region": "서울",
+    "age": 21,
+    "region": "경기",
     "household_size": 1,
-    "employment_status": "무직/구직중",
-    "income_monthly_manwon": 200,
-    "income_level": "중위소득 80% 이하"
+    "employment_status": "대학생",
+    "income_monthly_manwon": 0,
+    "income_level": "중위소득 50% 이하"
   },
 
   "situation": {
     "is_disabled": false,
     "is_single_parent": false,
     "is_elderly": false,
-    "has_loan_debt": true,
-    "housing_type": "월세",
+    "has_loan_debt": false,
+    "housing_type": "미정",
     "medical_issue": false,
     "disaster_victim": false,
     "crime_victim": false
   },
 
   "interests": {
-    "categories": ["생활비지원", "의료비지원", "주거지원", "실업급여", "저금리대출", "긴급복지", "피해보상", "훈련지원"],
-    "keywords": ["생계", "긴급", "의료비", "주거", "실업", "대출", "보상", "바우처", "수당", "급여"],
+    "categories": ["청년지원", "장학금", "취업지원", "창업지원", "주거지원", "생활비지원", "훈련지원", "교육지원", "복지"],
+    "keywords": ["청년", "대학생", "장학금", "취업", "창업", "주거", "생활비", "교육", "훈련", "바우처", "지원금"],
     "exclude_keywords": []
   },
 
@@ -32,7 +32,7 @@
     "email": false,
     "slack": false,
     "notion": true,
-    "min_score": 50,
-    "max_items": 15
+    "min_score": 40,
+    "max_items": 20
   }
 }
