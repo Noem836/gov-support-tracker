@@ -957,13 +957,15 @@ import re as _re
 def _parse_gov24_deadline(text: str) -> tuple:
     """신청기한 텍스트 → (deadline: str, ongoing: bool)
     텍스트 예: "2026.12.31", "2026-12-31", "2026.01.01 ~ 2026.12.31",
-               "2026년 12월 31일까지", "상시신청", "연중"
+               "2026년 12월 31일까지", "상시신청", "연중", "매년", "연 1회"
     """
     if not text:
         return "", False
     text = text.strip()
 
-    if any(kw in text for kw in ("상시", "연중", "수시", "기간없음", "해당없음")):
+    # 상시/연중/매년 반복 → ongoing
+    if any(kw in text for kw in ("상시", "연중", "수시", "기간없음", "해당없음",
+                                  "매년", "연 1회", "연1회", "정기", "분기")):
         return "", True
 
     # 날짜 패턴을 모두 찾아 가장 나중 날짜를 마감일로 사용
@@ -1028,20 +1030,37 @@ def fetch_gov24() -> list:
             logger.info(f"보조금24 응답 필드: {sorted(items[0].keys())}")
 
         for item in items:
-            title = (item.get("서비스명") or "").strip()
+            title    = (item.get("서비스명") or "").strip()
+            category = (item.get("서비스분야") or item.get("지원유형") or "복지혜택").strip()
+            amount   = (item.get("지원내용") or "").strip()
+            target   = (item.get("지원대상") or "").strip()
+
             if not title:
+                continue
+
+            # 현금·금전 지원이 아닌 서비스는 제외 (교육·상담·공간제공 등)
+            if not is_cash_support(title, category, amount, target):
                 continue
 
             deadline_raw = (item.get("신청기한") or "").strip()
             deadline, ongoing = _parse_gov24_deadline(deadline_raw)
 
+            # 마감일이 이미 지난 항목 제외
+            if deadline and not ongoing:
+                try:
+                    from datetime import date as _date
+                    if _date.fromisoformat(deadline) < _date.today():
+                        continue
+                except ValueError:
+                    pass
+
             programs.append({
                 "id":         make_id("gov24", item.get("서비스ID") or title),
                 "title":      title,
                 "agency":     (item.get("소관기관명") or "").strip(),
-                "category":   (item.get("서비스분야") or item.get("지원유형") or "복지혜택").strip(),
-                "target":     (item.get("지원대상") or "").strip(),
-                "amount":     (item.get("지원내용") or "").strip(),
+                "category":   category,
+                "target":     target,
+                "amount":     amount,
                 "deadline":   deadline,
                 "ongoing":    ongoing,
                 "region":     "전국",
