@@ -30,6 +30,14 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 
+# 현금·금전 지원 여부 판단 키워드 (이 중 하나라도 있으면 수집 대상)
+CASH_KEYWORDS = [
+    "지원금", "보조금", "장려금", "수당", "급여", "장학금", "활동비", "창작비",
+    "제작비", "사업비", "운영비", "인건비", "연구비", "융자", "대출", "보증",
+    "바우처", "현금", "직불금", "보상금", "구조금", "배상", "환급", "지급",
+    "창업자금", "R&D", "사업화", "정착금", "이주비", "훈련비", "교육비",
+]
+
 BOKJIRO_CATEGORIES = {
     "001": "생활안정",
     "002": "주거",
@@ -587,6 +595,386 @@ def fetch_emergency_support() -> list:
     return programs
 
 
+# ─── 현금지원 필터 헬퍼 ──────────────────────────────────────────────────────────
+
+def is_cash_support(title: str, category: str = "", amount: str = "", target: str = "") -> bool:
+    text = f"{title} {category} {amount} {target}"
+    return any(kw in text for kw in CASH_KEYWORDS)
+
+
+# ─── 소스 7: 기업마당 금융/보조금 공고 ───────────────────────────────────────────
+
+def fetch_bizinfo_financial() -> list:
+    """기업마당 — 금융·창업 카테고리 공고 (현금지원 필터 적용)"""
+    base_url = "https://www.bizinfo.go.kr/web/lay1/S1T122C128/AS/74/list.do"
+    # pBizSe: 01=금융, 06=창업, 07=R&D (현금 지원 포함 카테고리만)
+    categories = [("01", "금융"), ("06", "창업"), ("07", "R&D")]
+    programs = []
+
+    for code, cat_name in categories:
+        try:
+            params = {"pBizSe": code, "pageUnit": 100, "pageIndex": 1}
+            resp = retry_request(base_url, params=params, timeout=30)
+            soup = BeautifulSoup(resp.text, "lxml")
+            rows = soup.select("table tbody tr") or soup.select("ul.list-type li")
+
+            count = 0
+            for row in rows:
+                link = row.find("a", href=True)
+                if not link:
+                    continue
+                title = link.get_text(strip=True)
+                href = link.get("href", "")
+                if href.startswith("/"):
+                    href = "https://www.bizinfo.go.kr" + href
+
+                cols = row.find_all("td")
+                agency   = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+                period   = cols[3].get_text(strip=True) if len(cols) > 3 else ""
+                deadline = ""
+                if "~" in period:
+                    deadline = period.split("~")[-1].strip()[:10]
+
+                # 현금지원 키워드 필터
+                if not is_cash_support(title, cat_name):
+                    continue
+
+                programs.append({
+                    "id": make_id("bizinfo_fin", href),
+                    "title": title,
+                    "agency": agency,
+                    "category": cat_name,
+                    "target": "",
+                    "amount": "",
+                    "deadline": deadline,
+                    "region": "전국",
+                    "url": href,
+                    "source": "기업마당",
+                    "fetched_at": datetime.now().isoformat(),
+                })
+                count += 1
+
+            logger.info(f"기업마당 {cat_name}: {count}건")
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"기업마당 {cat_name} 실패: {e}")
+
+    return programs
+
+
+# ─── 소스 8: 한국문화예술위원회 ───────────────────────────────────────────────────
+
+def fetch_arko() -> list:
+    """한국문화예술위원회 — 예술활동지원금, 창작지원금 (현금지원만)"""
+    programs = []
+
+    # 공모·지원사업 목록 스크래핑
+    try:
+        resp = retry_request("https://www.arko.or.kr/business/category/list.do", timeout=25)
+        soup = BeautifulSoup(resp.text, "lxml")
+        items = (
+            soup.select(".board-list tbody tr")
+            or soup.select("ul.list li")
+            or soup.select(".support-list li")
+        )
+        count = 0
+        for item in items:
+            link = item.find("a", href=True)
+            if not link:
+                continue
+            title = link.get_text(strip=True)
+            href = link.get("href", "")
+            if href.startswith("/"):
+                href = "https://www.arko.or.kr" + href
+
+            if not is_cash_support(title, "예술지원금"):
+                continue
+
+            programs.append({
+                "id": make_id("arko", href),
+                "title": title,
+                "agency": "한국문화예술위원회",
+                "category": "예술활동지원",
+                "target": "예술인·예술단체",
+                "amount": "",
+                "deadline": "",
+                "region": "전국",
+                "url": href,
+                "source": "예술위원회",
+                "fetched_at": datetime.now().isoformat(),
+            })
+            count += 1
+        logger.info(f"예술위원회 스크래핑: {count}건")
+    except Exception as e:
+        logger.warning(f"예술위원회 스크래핑 실패: {e}")
+
+    # 대표 지원사업 고정 항목 (상시)
+    fixed = [
+        {
+            "title": "예술인 활동준비금 지원",
+            "amount": "1인당 최대 300만원",
+            "target": "예술활동증명 완료 예술인",
+            "url": "https://www.arko.or.kr/business/artSupport/list.do",
+            "category": "예술활동지원",
+        },
+        {
+            "title": "창작준비금 지원 (예술인복지재단)",
+            "amount": "1인당 최대 300만원",
+            "target": "예술활동증명 완료 예술인 (소득기준 충족)",
+            "url": "https://www.kawf.or.kr/",
+            "category": "예술활동지원",
+        },
+        {
+            "title": "예술인 창작지원금 (문화예술진흥기금)",
+            "amount": "프로젝트별 수백만~수천만원",
+            "target": "개인 예술인 및 예술단체",
+            "url": "https://www.arko.or.kr/business/artSupport/list.do",
+            "category": "창작지원금",
+        },
+    ]
+    existing = {p["title"] for p in programs}
+    for item in fixed:
+        if item["title"] not in existing:
+            programs.append({
+                "id": make_id("arko_fixed", item["url"] + item["title"]),
+                "title": item["title"],
+                "agency": "한국문화예술위원회 / 예술인복지재단",
+                "category": item["category"],
+                "target": item["target"],
+                "amount": item["amount"],
+                "deadline": "",
+                "region": "전국",
+                "url": item["url"],
+                "source": "예술위원회",
+                "fetched_at": datetime.now().isoformat(),
+            })
+
+    logger.info(f"예술위원회 최종: {len(programs)}건")
+    return programs
+
+
+# ─── 소스 9: 청년정책포털 ────────────────────────────────────────────────────────
+
+def fetch_youth_portal() -> list:
+    """청년정책포털 — 청년 현금지원 (월세·저축·도약계좌·장려금 등)"""
+    programs = []
+
+    try:
+        resp = retry_request(
+            "https://www.youth.go.kr/youth/policy/youthPolicyList.do",
+            params={"pageIndex": 1, "pageUnit": 100},
+            timeout=25,
+        )
+        soup = BeautifulSoup(resp.text, "lxml")
+        items = soup.select(".policy-list li") or soup.select("table tbody tr")
+
+        count = 0
+        for item in items:
+            link = item.find("a", href=True)
+            if not link:
+                continue
+            title = link.get_text(strip=True)
+            href = link.get("href", "")
+            if href.startswith("/"):
+                href = "https://www.youth.go.kr" + href
+
+            desc = item.find("p") or item.find(class_=lambda x: x and "desc" in str(x))
+            amount = desc.get_text(strip=True)[:100] if desc else ""
+
+            if not is_cash_support(title, "청년지원", amount):
+                continue
+
+            programs.append({
+                "id": make_id("youth", href),
+                "title": title,
+                "agency": "청년정책조정위원회",
+                "category": "청년지원",
+                "target": "만 19~34세 청년",
+                "amount": amount,
+                "deadline": "",
+                "region": "전국",
+                "url": href,
+                "source": "청년포털",
+                "fetched_at": datetime.now().isoformat(),
+            })
+            count += 1
+        logger.info(f"청년포털 스크래핑: {count}건")
+    except Exception as e:
+        logger.warning(f"청년포털 스크래핑 실패: {e}")
+
+    # 대표 청년 현금지원 고정 항목
+    fixed = [
+        {
+            "title": "청년 월세 한시 특별지원",
+            "amount": "월 최대 20만원, 최대 12개월 (총 240만원)",
+            "target": "만 19~34세, 독립거주 청년 (부모와 별거, 소득기준 충족)",
+            "url": "https://www.youth.go.kr/youth/policy/youthPolicyDetail.do",
+            "category": "주거비지원",
+        },
+        {
+            "title": "청년 내일저축계좌",
+            "amount": "월 10만원 저축 시 정부 30만원 적립 (3년 만기 최대 1,440만원)",
+            "target": "일하는 청년 (중위소득 100% 이하, 만 19~34세)",
+            "url": "https://www.bokjiro.go.kr",
+            "category": "자산형성지원",
+        },
+        {
+            "title": "청년도약계좌",
+            "amount": "월 40~70만원 납입 시 정부 기여금 최대 월 2.4만원 + 비과세 이자",
+            "target": "만 19~34세, 개인소득 6,000만원 이하",
+            "url": "https://www.youth.go.kr",
+            "category": "자산형성지원",
+        },
+        {
+            "title": "근로장려금 (청년)",
+            "amount": "단독가구 최대 165만원 / 홑벌이 285만원 / 맞벌이 330만원",
+            "target": "소득·재산 기준 충족 근로자·사업자",
+            "url": "https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=2325&cntntsId=7726",
+            "category": "장려금",
+        },
+        {
+            "title": "청년창업지원금 (창업진흥원)",
+            "amount": "최대 1억원 (사업화 자금)",
+            "target": "만 39세 이하 예비창업자·초기창업자",
+            "url": "https://www.k-startup.go.kr",
+            "category": "창업지원금",
+        },
+    ]
+    existing = {p["title"] for p in programs}
+    for item in fixed:
+        if item["title"] not in existing:
+            programs.append({
+                "id": make_id("youth_fixed", item["url"] + item["title"]),
+                "title": item["title"],
+                "agency": "정부",
+                "category": item["category"],
+                "target": item["target"],
+                "amount": item["amount"],
+                "deadline": "",
+                "region": "전국",
+                "url": item["url"],
+                "source": "청년포털",
+                "fetched_at": datetime.now().isoformat(),
+            })
+
+    logger.info(f"청년포털 최종: {len(programs)}건")
+    return programs
+
+
+# ─── 소스 10: 추가 현금지원 기관 ─────────────────────────────────────────────────
+
+def fetch_additional_cash_support() -> list:
+    """K-Startup, 예술인복지재단, 콘텐츠진흥원, 국민체육진흥공단 등 현금지원 고정 항목"""
+    fixed = [
+        # K-Startup 창업지원
+        {
+            "title": "예비창업패키지 (사업화 자금)",
+            "agency": "창업진흥원",
+            "amount": "최대 1억원",
+            "target": "예비창업자 (만 39세 이하 우대)",
+            "url": "https://www.k-startup.go.kr",
+            "category": "창업지원금",
+            "source": "K-Startup",
+        },
+        {
+            "title": "초기창업패키지",
+            "agency": "창업진흥원",
+            "amount": "최대 1억원 (평균 5천만원)",
+            "target": "창업 3년 이내 기업",
+            "url": "https://www.k-startup.go.kr",
+            "category": "창업지원금",
+            "source": "K-Startup",
+        },
+        # 콘텐츠진흥원
+        {
+            "title": "콘텐츠 창업도약 패키지",
+            "agency": "한국콘텐츠진흥원",
+            "amount": "최대 1억원 (사업화 자금)",
+            "target": "웹툰·음악·영상·게임 등 콘텐츠 창업자",
+            "url": "https://www.kocca.kr/",
+            "category": "창업지원금",
+            "source": "콘텐츠진흥원",
+        },
+        {
+            "title": "독립예술영화 제작지원",
+            "agency": "영화진흥위원회",
+            "amount": "편당 최대 5천만원",
+            "target": "독립영화 제작자·감독",
+            "url": "https://www.kofic.or.kr/",
+            "category": "창작지원금",
+            "source": "영화진흥위원회",
+        },
+        # 예술인복지재단
+        {
+            "title": "예술인 파견지원 (예술로)",
+            "agency": "한국예술인복지재단",
+            "amount": "활동비 월 최대 180만원",
+            "target": "예술활동증명 완료 예술인",
+            "url": "https://www.kawf.or.kr/",
+            "category": "예술활동지원",
+            "source": "예술인복지재단",
+        },
+        {
+            "title": "예술인 고용보험",
+            "agency": "한국예술인복지재단",
+            "amount": "실업급여 상당 (이직 전 평균보수의 60%)",
+            "target": "문화예술용역 계약 체결 예술인",
+            "url": "https://www.kawf.or.kr/",
+            "category": "고용보험",
+            "source": "예술인복지재단",
+        },
+        # 국민체육진흥공단
+        {
+            "title": "체육인 복지지원금",
+            "agency": "국민체육진흥공단",
+            "amount": "생활체육 지도자 활동비 등 (사업별 상이)",
+            "target": "체육인·체육지도자",
+            "url": "https://www.kspo.or.kr/",
+            "category": "체육지원금",
+            "source": "국민체육진흥공단",
+        },
+        # 중소기업기술정보진흥원
+        {
+            "title": "중소기업 기술개발 지원 (R&D 자금)",
+            "agency": "중소기업기술정보진흥원",
+            "amount": "과제당 최대 수억원 (매칭 방식)",
+            "target": "중소기업·스타트업",
+            "url": "https://www.tipa.or.kr/",
+            "category": "R&D지원금",
+            "source": "기술정보진흥원",
+        },
+        # 문화체육관광부
+        {
+            "title": "지역문화 예술지원사업",
+            "agency": "문화체육관광부",
+            "amount": "사업별 수백만~수천만원",
+            "target": "지역 문화예술단체·기획자",
+            "url": "https://www.mcst.go.kr/",
+            "category": "문화예술지원",
+            "source": "문화체육관광부",
+        },
+    ]
+
+    programs = []
+    for item in fixed:
+        programs.append({
+            "id": make_id(item["source"], item["url"] + item["title"]),
+            "title": item["title"],
+            "agency": item["agency"],
+            "category": item["category"],
+            "target": item["target"],
+            "amount": item["amount"],
+            "deadline": "",
+            "region": "전국",
+            "url": item["url"],
+            "source": item["source"],
+            "fetched_at": datetime.now().isoformat(),
+        })
+
+    logger.info(f"추가 현금지원 기관: {len(programs)}건")
+    return programs
+
+
 # ─── 중복 제거 ──────────────────────────────────────────────────────────────────
 
 def dedup(programs: list) -> list:
@@ -625,6 +1013,18 @@ def fetch_all(context: dict) -> dict:
 
     logger.info("긴급복지/재난·피해 지원 수집 중...")
     all_programs.extend(fetch_emergency_support())
+
+    logger.info("기업마당 금융/보조금 공고 수집 중...")
+    all_programs.extend(fetch_bizinfo_financial())
+
+    logger.info("한국문화예술위원회 수집 중...")
+    all_programs.extend(fetch_arko())
+
+    logger.info("청년정책포털 수집 중...")
+    all_programs.extend(fetch_youth_portal())
+
+    logger.info("추가 현금지원 기관 수집 중...")
+    all_programs.extend(fetch_additional_cash_support())
 
     deduped = dedup(all_programs)
     logger.info(f"수집 합계: {len(all_programs)}건 → 중복제거: {len(deduped)}건")
