@@ -36,9 +36,9 @@ def days_until(deadline_str: str) -> int | None:
         return None
 
 
-def deadline_label(deadline_str: str) -> str:
+def deadline_label(deadline_str: str, ongoing: bool = False) -> str:
     if not deadline_str:
-        return "미정"
+        return "상시 모집" if ongoing else "미정"
     days = days_until(deadline_str)
     if days is None:
         return deadline_str
@@ -309,7 +309,7 @@ def _notion_page_blocks(p: dict) -> list:
     """사업 상세를 Notion 블록으로 변환 (페이지 내부)"""
     dl      = p.get("deadline", "")
     score   = p.get("score", 0)
-    d_label = deadline_label(dl)
+    d_label = deadline_label(dl, ongoing=p.get("ongoing", False))
 
     def divider():
         return {"object": "block", "type": "divider", "divider": {}}
@@ -345,7 +345,7 @@ def _notion_page_blocks(p: dict) -> list:
             f"📂 분야: {p.get('category', '미정')}",
             f"🌏 지역: {p.get('region', '전국')}",
             f"💰 지원금액: {p.get('amount', '확인 필요')}",
-            f"📅 신청기간: {p.get('start_date', '미정')} ~ {dl or '미정'}  ({d_label})",
+            f"📅 신청기간: {'상시 모집' if p.get('ongoing') and not dl else f\"{p.get('start_date', '미정')} ~ {dl or '미정'}  ({d_label})\"}",
         ]),
         divider(),
         heading("🤖 AI 분석"),

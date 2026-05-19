@@ -281,6 +281,7 @@ def fetch_kinfa() -> list:
                     "target": "",
                     "amount": desc.get_text(strip=True)[:100] if desc else "",
                     "deadline": "",
+                    "ongoing": True,
                     "region": "전국",
                     "url": href,
                     "source": "서민금융진흥원",
@@ -300,6 +301,7 @@ def fetch_kinfa() -> list:
             "target": p["target"],
             "amount": p["amount"],
             "deadline": "",
+            "ongoing": True,
             "region": "전국",
             "url": p["url"],
             "source": "서민금융진흥원",
@@ -398,6 +400,7 @@ def fetch_work24() -> list:
                 "target": item["target"],
                 "amount": item["amount"],
                 "deadline": "",
+                "ongoing": True,
                 "region": "전국",
                 "url": item["url"],
                 "source": "고용24",
@@ -519,6 +522,7 @@ def fetch_emergency_support() -> list:
             "target": item["target"],
             "amount": item["amount"],
             "deadline": "",
+            "ongoing": True,
             "region": "전국",
             "url": item["url"],
             "source": "정부지원",
@@ -750,7 +754,7 @@ def fetch_youth_portal() -> list:
     except Exception as e:
         logger.warning(f"청년포털 스크래핑 실패: {e}")
 
-    # 대표 청년 현금지원 고정 항목
+    # 대표 청년 현금지원 고정 항목 (ongoing=True: 상시 신청, False: 공모 기간 있음)
     fixed = [
         {
             "title": "청년 월세 한시 특별지원",
@@ -758,6 +762,7 @@ def fetch_youth_portal() -> list:
             "target": "만 19~34세, 독립거주 청년 (부모와 별거, 소득기준 충족)",
             "url": "https://www.youthcenter.go.kr/youthPolicy/ythPlcyInfoMain",
             "category": "주거비지원",
+            "ongoing": False,
         },
         {
             "title": "청년 내일저축계좌",
@@ -765,6 +770,7 @@ def fetch_youth_portal() -> list:
             "target": "일하는 청년 (중위소득 100% 이하, 만 19~34세)",
             "url": "https://www.bokjiro.go.kr",
             "category": "자산형성지원",
+            "ongoing": False,
         },
         {
             "title": "청년도약계좌",
@@ -772,6 +778,7 @@ def fetch_youth_portal() -> list:
             "target": "만 19~34세, 개인소득 6,000만원 이하",
             "url": "https://www.youthcenter.go.kr/youthPolicy/ythPlcyInfoMain",
             "category": "자산형성지원",
+            "ongoing": True,
         },
         {
             "title": "근로장려금 (청년)",
@@ -779,6 +786,7 @@ def fetch_youth_portal() -> list:
             "target": "소득·재산 기준 충족 근로자·사업자",
             "url": "https://www.nts.go.kr/nts/cm/cntnts/cntntsView.do?mi=2325&cntntsId=7726",
             "category": "장려금",
+            "ongoing": True,
         },
         {
             "title": "청년창업지원금 (창업진흥원)",
@@ -786,6 +794,7 @@ def fetch_youth_portal() -> list:
             "target": "만 39세 이하 예비창업자·초기창업자",
             "url": "https://www.k-startup.go.kr",
             "category": "창업지원금",
+            "ongoing": False,
         },
     ]
     existing = {p["title"] for p in programs}
@@ -799,6 +808,7 @@ def fetch_youth_portal() -> list:
                 "target": item["target"],
                 "amount": item["amount"],
                 "deadline": "",
+                "ongoing": item.get("ongoing", False),
                 "region": "전국",
                 "url": item["url"],
                 "source": "청년포털",
@@ -861,6 +871,7 @@ def fetch_additional_cash_support() -> list:
             "url": "https://www.kawf.or.kr/",
             "category": "예술활동지원",
             "source": "예술인복지재단",
+            "ongoing": False,
         },
         {
             "title": "예술인 고용보험",
@@ -870,6 +881,7 @@ def fetch_additional_cash_support() -> list:
             "url": "https://www.kawf.or.kr/",
             "category": "고용보험",
             "source": "예술인복지재단",
+            "ongoing": True,
         },
         # 국민체육진흥공단
         {
@@ -913,6 +925,7 @@ def fetch_additional_cash_support() -> list:
             "target": item["target"],
             "amount": item["amount"],
             "deadline": "",
+            "ongoing": item.get("ongoing", False),
             "region": "전국",
             "url": item["url"],
             "source": item["source"],

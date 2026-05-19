@@ -111,11 +111,18 @@ def has_actionable_data(p: dict) -> bool:
     return len(amount) > 3 or len(target) > 5 or len(url) > 10
 
 
-def has_valid_future_deadline(p: dict) -> bool:
-    """마감일이 있고 오늘 이후인 항목만 통과"""
+def is_eligible_by_period(p: dict) -> bool:
+    """기간 기준 통과 여부:
+    - ongoing=True (상시): 항상 통과
+    - 마감일이 있고 오늘 이후: 통과
+    - 마감일 없고 ongoing=False (기간 불명): 제외
+    - 마감일이 이미 지남: 제외
+    """
+    if p.get("ongoing"):
+        return True
     deadline = (p.get("deadline") or "").strip()
     if not deadline:
-        return False
+        return False  # 기간 불명확 → 제외
     try:
         return date.fromisoformat(deadline[:10]) >= date.today()
     except ValueError:
@@ -132,16 +139,13 @@ def prefilter(programs: list, profile: dict) -> list:
 
     result = []
     for p in programs:
-        # 유효한 정보가 없는 항목 제외
         if not has_actionable_data(p):
             continue
-        # 마감일이 명확하고 아직 지나지 않은 항목만
-        if not has_valid_future_deadline(p):
+        if not is_eligible_by_period(p):
             continue
         text = f"{p.get('title','')} {p.get('category','')} {p.get('target','')}".lower()
         if exclude_kws and any(ex in text for ex in exclude_kws):
             continue
-        # 관심 키워드/카테고리 중 하나라도 매칭되어야 통과
         if positive_kw and not any(kw in text for kw in positive_kw):
             continue
         result.append(p)
