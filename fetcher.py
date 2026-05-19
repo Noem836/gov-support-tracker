@@ -98,14 +98,21 @@ def _parse_bokjiro_xml(xml_text: str) -> list:
         title   = t("servNm")
         if not title:
             continue
+        def fmt_date(raw: str) -> str:
+            raw = raw.strip()[:8]
+            if len(raw) == 8 and raw.isdigit():
+                return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+            return ""
+
         items.append({
             "id":         make_id("bokjiro", serv_id or title),
             "title":      title,
             "agency":     t("bizChrDeptNm"),
             "category":   t("intrsThemaNmArray") or "복지",
             "target":     t("trgterIndvdlNmArray"),
-            "amount":     "",  # 복지로 API는 금액 미제공 (sprtCycNm은 지원주기)
-            "deadline":   "",
+            "amount":     "",  # 복지로 API는 금액 미제공
+            "start_date": fmt_date(t("servBgngYmd")),
+            "deadline":   fmt_date(t("servEndYmd")),
             "region":     t("ctpvNm") or t("sggNm") or "지자체",
             "url":        t("servDtlLink"),
             "source":     "복지로",
@@ -178,6 +185,12 @@ def fetch_national_welfare_api() -> list:
                     title   = t("servNm")
                     if not title:
                         continue
+                    def fmt_date(raw: str) -> str:
+                        raw = raw.strip()[:8]
+                        if len(raw) == 8 and raw.isdigit():
+                            return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+                        return ""
+
                     programs.append({
                         "id":         make_id("national_welfare", serv_id or title),
                         "title":      title,
@@ -185,7 +198,8 @@ def fetch_national_welfare_api() -> list:
                         "category":   t("intrsThemaArray") or "복지",
                         "target":     t("trgterIndvdlArray"),
                         "amount":     "",  # 복지로 API는 금액 미제공
-                        "deadline":   "",
+                        "start_date": fmt_date(t("servBgngYmd")),
+                        "deadline":   fmt_date(t("servEndYmd")),
                         "region":     "전국",
                         "url":        t("servDtlLink"),
                         "source":     "복지로(중앙부처)",
@@ -549,27 +563,31 @@ def fetch_bizinfo_financial() -> list:
                     href = "https://www.bizinfo.go.kr" + href
 
                 cols = row.find_all("td")
-                agency   = cols[4].get_text(strip=True) if len(cols) > 4 else ""
-                period   = cols[3].get_text(strip=True) if len(cols) > 3 else ""
-                deadline = ""
+                agency     = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+                period     = cols[3].get_text(strip=True) if len(cols) > 3 else ""
+                start_date = ""
+                deadline   = ""
                 if "~" in period:
-                    deadline = period.split("~")[-1].strip()[:10]
+                    parts = period.split("~")
+                    start_date = parts[0].strip()[:10].replace(".", "-")
+                    deadline   = parts[1].strip()[:10].replace(".", "-")
 
                 # 현금지원 키워드 필터
                 if not is_cash_support(title, cat_name):
                     continue
 
                 programs.append({
-                    "id": make_id("bizinfo_fin", href),
-                    "title": title,
-                    "agency": agency,
-                    "category": cat_name,
-                    "target": "",
-                    "amount": "",
-                    "deadline": deadline,
-                    "region": "전국",
-                    "url": href,
-                    "source": "기업마당",
+                    "id":         make_id("bizinfo_fin", href),
+                    "title":      title,
+                    "agency":     agency,
+                    "category":   cat_name,
+                    "target":     "",
+                    "amount":     "",
+                    "start_date": start_date,
+                    "deadline":   deadline,
+                    "region":     "전국",
+                    "url":        href,
+                    "source":     "기업마당",
                     "fetched_at": datetime.now().isoformat(),
                 })
                 count += 1

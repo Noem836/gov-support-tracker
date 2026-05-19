@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import anthropic
@@ -105,10 +105,21 @@ def analyze_batch(client: anthropic.Anthropic, programs: list, profile: dict) ->
 
 def has_actionable_data(p: dict) -> bool:
     """금액·대상·URL 중 최소 하나는 있어야 유용한 항목으로 판단"""
-    amount  = (p.get("amount") or "").strip()
-    target  = (p.get("target") or "").strip()
-    url     = (p.get("url") or "").strip()
+    amount = (p.get("amount") or "").strip()
+    target = (p.get("target") or "").strip()
+    url    = (p.get("url") or "").strip()
     return len(amount) > 3 or len(target) > 5 or len(url) > 10
+
+
+def has_valid_future_deadline(p: dict) -> bool:
+    """마감일이 있고 오늘 이후인 항목만 통과"""
+    deadline = (p.get("deadline") or "").strip()
+    if not deadline:
+        return False
+    try:
+        return date.fromisoformat(deadline[:10]) >= date.today()
+    except ValueError:
+        return False
 
 
 def prefilter(programs: list, profile: dict) -> list:
@@ -123,6 +134,9 @@ def prefilter(programs: list, profile: dict) -> list:
     for p in programs:
         # 유효한 정보가 없는 항목 제외
         if not has_actionable_data(p):
+            continue
+        # 마감일이 명확하고 아직 지나지 않은 항목만
+        if not has_valid_future_deadline(p):
             continue
         text = f"{p.get('title','')} {p.get('category','')} {p.get('target','')}".lower()
         if exclude_kws and any(ex in text for ex in exclude_kws):
