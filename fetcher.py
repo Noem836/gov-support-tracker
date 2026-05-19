@@ -21,7 +21,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_OUTPUT = Path("output")
-OPEN_DATA_API_KEY = os.getenv("OPEN_DATA_API_KEY", "")
+# .env 키는 URL 인코딩 상태로 저장돼 있으므로 디코딩 후 사용
+OPEN_DATA_API_KEY = unquote(os.getenv("OPEN_DATA_API_KEY", ""))
 SMES_API_KEY = os.getenv("SMES_API_KEY", "")
 BOKJIRO_API_KEY = os.getenv("BOKJIRO_API_KEY", "")
 
@@ -945,6 +946,124 @@ def fetch_additional_cash_support() -> list:
     return programs
 
 
+# ─── 소스 11: 보조금24 (행정안전부 대한민국 공공서비스 혜택 정보) ──────────────────
+
+# gov24 v3 API — 각 필드에 가능한 후보 키 목록 (실제 응답 키 발견 후 자동 선택)
+_GOV24_FIELD_MAP = {
+    "id":         ["svcId", "servId", "serviceId", "id"],
+    "title":      ["svcNm", "servNm", "serviceNm", "서비스명", "title"],
+    "agency":     ["jurOrgNm", "jrsdDptAllNm", "소관기관명", "기관명", "orgNm"],
+    "category":   ["lifeNmArray", "intrsThemaNm", "분야", "카테고리", "ctgryNm"],
+    "target":     ["svcTarget", "tgtNm", "지원대상", "applPrscbCn", "trgterIndvdlNmArray"],
+    "amount":     ["sprtCstAmt", "rprstAmt", "지원금액", "inqAmt", "sprtContent"],
+    "start_date": ["svcAplyBgngDt", "applBgngDd", "aplyBgngDt", "신청시작일", "신청기간시작"],
+    "end_date":   ["svcAplyEndDt", "applEndDd", "aplyEndDt", "신청종료일", "신청기간종료"],
+    "region":     ["ctpvNm", "sido", "지역", "areaNm", "sidoNm"],
+    "url":        ["svcInfoUrl", "svcDtlLink", "detailUrl", "infoUrl"],
+}
+
+
+def _pick(item: dict, candidates: list) -> str:
+    for key in candidates:
+        val = item.get(key)
+        if val and str(val).strip() not in ("", "null", "None"):
+            return str(val).strip()
+    return ""
+
+
+def _fmt_gov24_date(raw: str) -> str:
+    raw = raw.strip()
+    if len(raw) == 8 and raw.isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    if len(raw) >= 10 and raw[4] == "-":
+        return raw[:10]
+    return ""
+
+
+def fetch_gov24() -> list:
+    """행정안전부 보조금24 — 개인 대상 복지·혜택 서비스 목록
+    data.go.kr 데이터셋 15113968 신청 필요 (기존 OPEN_DATA_API_KEY 사용).
+    API 승인 전에는 빈 목록 반환.
+    """
+    if not OPEN_DATA_API_KEY:
+        logger.warning("OPEN_DATA_API_KEY 미설정 — 보조금24 API 생략")
+        return []
+
+    base_url = "https://api.odcloud.kr/api/gov24/v3/serviceList"
+    programs: list = []
+    page = 1
+    per_page = 100
+    discovered_fields: set = set()
+
+    while True:
+        params = {
+            "serviceKey": OPEN_DATA_API_KEY,
+            "page":       str(page),
+            "perPage":    str(per_page),
+            "returnType": "JSON",
+        }
+        try:
+            resp = requests.get(base_url, params=params, headers=HEADERS, timeout=20)
+            data = resp.json()
+        except Exception as e:
+            logger.warning(f"보조금24 API 호출 실패 (page {page}): {e}")
+            break
+
+        # 인증키 미승인 오류 → 조용히 종료 (data.go.kr에서 15113968 신청 필요)
+        if isinstance(data, dict) and data.get("code") in (-3, -4, -401):
+            logger.warning(
+                f"보조금24 API 미승인 — data.go.kr 데이터셋 15113968 신청 필요 "
+                f"(code={data.get('code')}, msg={data.get('msg')})"
+            )
+            return []
+
+        items = data.get("data") or data.get("items") or data.get("list") or []
+        if not items:
+            break
+
+        # 첫 페이지에서 실제 필드명 로깅 (디버깅용)
+        if page == 1 and items:
+            discovered_fields = set(items[0].keys())
+            logger.info(f"보조금24 응답 필드: {sorted(discovered_fields)}")
+
+        for item in items:
+            raw_start = _pick(item, _GOV24_FIELD_MAP["start_date"])
+            raw_end   = _pick(item, _GOV24_FIELD_MAP["end_date"])
+            start_date = _fmt_gov24_date(raw_start)
+            deadline   = _fmt_gov24_date(raw_end)
+            title      = _pick(item, _GOV24_FIELD_MAP["title"])
+            if not title:
+                continue
+
+            svc_id = _pick(item, _GOV24_FIELD_MAP["id"]) or title
+            url    = _pick(item, _GOV24_FIELD_MAP["url"])
+
+            programs.append({
+                "id":         make_id("gov24", svc_id),
+                "title":      title,
+                "agency":     _pick(item, _GOV24_FIELD_MAP["agency"]),
+                "category":   _pick(item, _GOV24_FIELD_MAP["category"]) or "복지혜택",
+                "target":     _pick(item, _GOV24_FIELD_MAP["target"]),
+                "amount":     _pick(item, _GOV24_FIELD_MAP["amount"]),
+                "start_date": start_date,
+                "deadline":   deadline,
+                "ongoing":    False,
+                "region":     _pick(item, _GOV24_FIELD_MAP["region"]) or "전국",
+                "url":        url,
+                "source":     "보조금24",
+                "fetched_at": datetime.now().isoformat(),
+            })
+
+        total = data.get("totalCount") or data.get("total") or 0
+        if not total or len(programs) >= int(total):
+            break
+        page += 1
+        time.sleep(0.3)
+
+    logger.info(f"보조금24: {len(programs)}건")
+    return programs
+
+
 # ─── 중복 제거 ──────────────────────────────────────────────────────────────────
 
 def dedup(programs: list) -> list:
@@ -967,6 +1086,9 @@ def fetch_all(context: dict) -> dict:
     # 복지로 API는 날짜 필드(servBgngYmd/servEndYmd)를 제공하지 않아
     # is_eligible_by_period() 필터에서 전부 탈락하므로 호출하지 않음
     # (GitHub Actions 미국 서버 → 한국 API 타임아웃의 원인이기도 함)
+
+    logger.info("보조금24 (행정안전부) 수집 중...")
+    all_programs.extend(fetch_gov24())
 
     logger.info("중소벤처24 API 수집 중...")
     all_programs.extend(fetch_smes())
