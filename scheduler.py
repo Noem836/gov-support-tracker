@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-매주 자동 실행 스케줄러
+매월 자동 실행 스케줄러
 실행: python scheduler.py [--run-now]
 
 cron 대안 (더 안정적):
-  0 9 * * 1 cd /path/to/gov-support-tracker && python harness.py >> logs/cron.log 2>&1
+  0 9 1 * * cd /path/to/gov-support-tracker && python harness.py >> logs/cron.log 2>&1
 """
 
 import logging
@@ -23,8 +23,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_weekly() -> None:
-    logger.info(f"주간 하네스 실행 시작: {datetime.now().isoformat()}")
+def run_monthly() -> None:
+    logger.info(f"월간 하네스 실행 시작: {datetime.now().isoformat()}")
     try:
         result = subprocess.run(
             [sys.executable, "harness.py"],
@@ -48,37 +48,32 @@ def run_weekly() -> None:
 
 
 def main() -> None:
-    # profile.json의 send_day / send_time 설정 반영
+    # profile.json의 send_day_of_month / send_time 설정 반영
     try:
         import json
         from pathlib import Path
         profile = json.loads(Path("profile.json").read_text(encoding="utf-8"))
-        notif   = profile.get("notification", {})
-        send_day  = notif.get("send_day", "monday").lower()
-        send_time = notif.get("send_time", "09:00")
+        notif          = profile.get("notification", {})
+        send_day_of_month = int(notif.get("send_day_of_month", 1))  # 매월 며칠 (기본: 1일)
+        send_time      = notif.get("send_time", "09:00")
     except Exception:
-        send_day, send_time = "monday", "09:00"
+        send_day_of_month, send_time = 1, "09:00"
 
-    day_map = {
-        "monday": schedule.every().monday,
-        "tuesday": schedule.every().tuesday,
-        "wednesday": schedule.every().wednesday,
-        "thursday": schedule.every().thursday,
-        "friday": schedule.every().friday,
-        "saturday": schedule.every().saturday,
-        "sunday": schedule.every().sunday,
-    }
-    trigger = day_map.get(send_day, schedule.every().monday)
-    trigger.at(send_time).do(run_weekly)
+    # schedule 라이브러리는 월간 스케줄을 직접 지원하지 않으므로 매일 확인 후 해당 날짜에만 실행
+    def monthly_check():
+        if datetime.now().day == send_day_of_month:
+            run_monthly()
 
-    logger.info(f"스케줄러 시작: 매주 {send_day} {send_time} 실행")
+    schedule.every().day.at(send_time).do(monthly_check)
+
+    logger.info(f"스케줄러 시작: 매월 {send_day_of_month}일 {send_time} 실행")
     next_run = schedule.next_run()
     if next_run:
-        logger.info(f"다음 실행 예정: {next_run}")
+        logger.info(f"다음 체크 예정: {next_run}")
 
     if "--run-now" in sys.argv:
         logger.info("--run-now: 즉시 실행")
-        run_weekly()
+        run_monthly()
 
     while True:
         schedule.run_pending()
