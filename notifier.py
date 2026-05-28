@@ -398,6 +398,11 @@ def _deadline_from_title(title: str) -> str | None:
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
 
 
+def _base_title(title: str) -> str:
+    """제목에서 날짜 괄호 '(시작~마감)' 부분을 제거해 사업명만 반환"""
+    return _re.sub(r'\s*\([^)]*\)\s*$', '', title).strip()
+
+
 def _cleanup_expired_pages(headers: dict) -> int:
     """마감일이 오늘보다 이전인 자식 페이지를 아카이브(삭제)"""
     today   = date.today()
@@ -445,8 +450,26 @@ def send_notion(programs: list) -> bool:
     if removed:
         logger.info(f"만료 페이지 {removed}건 삭제 완료")
 
-    success = 0
+    # ── Phase 1: 기존 페이지 전체 조회 → 중복 여부 판별 ──────────────────────
+    existing_titles = {
+        _base_title(b.get("child_page", {}).get("title", ""))
+        for b in _get_notion_child_pages(headers)
+    }
+    logger.info(f"Notion 기존 페이지 {len(existing_titles)}건 조회 완료")
+
+    new_programs = []
     for p in programs:
+        page_title = _make_notion_title(p)
+        if _base_title(page_title) in existing_titles:
+            logger.info(f"중복 스킵: {p.get('title', '')}")
+        else:
+            new_programs.append(p)
+
+    logger.info(f"신규 추가 대상: {len(new_programs)}건 / 중복 스킵: {len(programs) - len(new_programs)}건")
+
+    # ── Phase 2: 신규 사업만 페이지 생성 ────────────────────────────────────
+    success = 0
+    for p in new_programs:
         page_title = _make_notion_title(p)
         payload = {
             "parent":     {"page_id": NOTION_PAGE_ID},
@@ -468,7 +491,7 @@ def send_notion(programs: list) -> bool:
         except Exception as e:
             logger.warning(f"Notion 페이지 생성 실패 ({p.get('title','')}): {e}")
 
-    logger.info(f"Notion {success}/{len(programs)}건 추가 완료")
+    logger.info(f"Notion {success}/{len(new_programs)}건 추가 완료")
     return success > 0
 
 
